@@ -81,7 +81,7 @@ fi
 # Create virtual environment
 if $REPLACE_ENV; then
     echo "[$LOG] Creating virtual environment called $VENV."
-    if output=$(python3.8 -m virtualenv -p 3.11 venv 2>&1); then
+    if output=$(python3.8 -m virtualenv -p 3.8 venv 2>&1); then
         echo "[$LOG] $VENV created successfully."
     else
         echo "[$ERR] Failed to create virtual environment.
