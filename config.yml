@@ -1,0 +1,4 @@
+config-dir: ''
+data-dir: /net/sinatra/vault2-tina/welman/data
+name: meerkat-src-100
+plots-dir: ''
