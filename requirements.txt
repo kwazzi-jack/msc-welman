@@ -1,0 +1,11 @@
+simms
+quartical
+codex-africanus
+matplotlib
+SciencePlots
+tqdm
+zarr
+tabulate
+jupyter
+ipywidgets
+# https://github.com/ratt-ru/pfb-clean/archive/refs/heads/master.zip
