@@ -1,0 +1,7 @@
+config-dir: ''
+data-dir: /net/sinatra/vault2-tina/welman/meerkat-src-100
+mpl-dir: ''
+n-cpu: 24
+name: meerkat-src-100
+plots-dir: ''
+seed: 666
