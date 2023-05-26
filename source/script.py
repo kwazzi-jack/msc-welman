@@ -1,13 +1,17 @@
 from pathlib import Path
 import os
 from source.parameters import Settings, refreeze, YamlDict
-from source.other import check_for_data
+from source.other import check_for_data, DataExistsError
+from source.plotting import plotting_options
+from source.data import measurement_set_options, gains_options, visibility_options
+from source.algorithms import kalcal_diag_options, kalcal_full_options, quartical_options
 from IPython.display import display, clear_output
 import logging
 import time
+import shutil
+import ipywidgets as widgets
 
-
-def script_settings(path="config.yml"):
+def script_settings(path="config.yml", no_gui=False):
     directory, name = os.path.split(path)
     settings = Settings(
         name=str(name),
@@ -69,8 +73,10 @@ def script_settings(path="config.yml"):
         ["1-ERROR", "2-WARNING", "3-INFO", "4-DEBUG"],
     )
 
-    clear_output()
-    display(settings.to_widget())
+    app = settings.to_widget()
+    if not no_gui:
+        clear_output()
+        display(app)
     try:
         settings.from_yaml(name)
     except:
@@ -98,7 +104,7 @@ def __setup_logging(options):
     logging.basicConfig(level=logging.DEBUG)
 
     formatter = logging.Formatter(
-        "[%(asctime)s | %(levelname)s | %(module)s.%(funcName)s] %(message)s"
+        "[%(asctime)s | %(levelname)s | source.%(module)s] %(message)s"
     )
 
     logger = logging.getLogger()
@@ -106,13 +112,17 @@ def __setup_logging(options):
     stream_handler.setLevel(level)
     stream_handler.setFormatter(formatter)
 
+    formatter = logging.Formatter(
+        "[%(asctime)s | %(levelname)s | %(module)s.%(funcName)s] %(message)s"
+    )
+
     file_handler = logging.FileHandler(log_path)
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
 
-def __generate_dir_skeleton(paths):
+def __generate_dir_skeleton(paths, cleanup=False):
     logging.info("Creating directory paths")
     main_dir = paths["main-dir"]
     config_dir = paths["config-dir"]
@@ -121,26 +131,16 @@ def __generate_dir_skeleton(paths):
     runs_dir = paths["runs-dir"]
 
     dirs = [main_dir, config_dir, data_dir, plots_dir, runs_dir]
-
-    for mtype in ["gains", "fluxes", "fits"]:
-        base_dir = data_dir / mtype
-        dirs.append(base_dir)
-        logging.debug(f"Added to paths: `{base_dir}`")
-        paths[mtype] = dict()
-        for alg in ["kalcal-diag", "kalcal-full", "quartical", "true"]:
-            alg_dir = base_dir / alg
-            dirs.append(alg_dir)
-            logging.debug(f"Added to paths: `{alg_dir}`")
-            if "kalcal" in alg:
-                filter_path = alg_dir / "filter"
-                smoother_path = alg_dir / "smoother"
-                paths[mtype][alg] = {"filter": filter_path, "smoother": smoother_path}
-                dirs.append(filter_path)
-                logging.debug(f"Added to paths: `{filter_path}`")
-                dirs.append(smoother_path)
-                logging.debug(f"Added to paths: `{smoother_path}`")
-            else:
-                paths[mtype][alg] = alg_dir
+    if cleanup:
+        try:
+            check_for_data(*dirs)
+            for path in dirs:
+                try:
+                    shutil.rmtree(path)
+                except:
+                    pass
+        except DataExistsError:
+            pass
 
     logging.info("Making directories")
     for path in dirs:
@@ -190,7 +190,7 @@ def __set_matplotlib_dir(options):
         logging.info(f"Matplotlib config directory unchanged")
 
 
-def __set_paths(options):
+def __set_paths(options, cleanup=False):
     logging.info("Fetching directory paths")
     main_dir = Path(options["name"])
     logging.debug(f"Identified main directory: `{main_dir}`")
@@ -220,7 +220,7 @@ def __set_paths(options):
     logging.debug(f"Identified log file: `{log_name}`")
 
     logging.info("Creating new path data")
-    path_config = YamlDict(path_name, freeze=True, overwrite=True)
+    path_config = YamlDict(path_name, freeze=True, overwrite=cleanup)
     logging.debug("Path config file created, set to frozen")
 
     logging.debug("Setting path data as previously identified")
@@ -236,32 +236,74 @@ def __set_paths(options):
     return path_config
 
 
-def __set_params(paths, options):
+def __set_params(paths, options, cleanup=False):
     config_dir = paths["config-dir"]
     path_name = config_dir / "params.yml"
     logging.info("Creating new parameter data")
-    param_config = YamlDict(path_name, freeze=True, overwrite=True)
+    param_config = YamlDict(path_name, freeze=True, overwrite=cleanup)
     logging.debug("Parameter config file created, set to frozen")
     logging.debug("Setting parameter data")
 
     with refreeze(param_config) as file:
         file["n-cpu"] = options["n-cpu"]
-        logging.debug(f"Parameter added: `n-cpu={options['n-cpu']}`")
         file["seed"] = options["seed"]
-        logging.debug(f"Parameter added: `seed={options['seed']}`")
         file["paths"] = paths
-        logging.debug(f"Path data moved into parameter config")
 
     logging.info("Completed and returning parameters")
     return param_config
 
-def setup_simulation(options):
+def setup_simulation(options, cleanup=False):
     __setup_logging(options)
-    paths = __set_paths(options)
-    __generate_dir_skeleton(paths)
+    paths = __set_paths(options, cleanup)
+    __generate_dir_skeleton(paths, cleanup)
     __set_thread_count(options)
     __set_random_seed(options)
     __set_matplotlib_dir(options)
-    params = __set_params(paths, options)
+    params = __set_params(paths, options, cleanup)
     logging.info("Simulation setup complete")
     return params
+
+def main_settings(name="config.yml", cleanup=False):
+    titles = ['Script', 'Plotting', 'Measurement Set', 
+              'Gains', 'Visibilities', "kalcal-diag",
+              "kalcal-full", "QuartiCal"]
+    script_options = script_settings(name, no_gui=True)
+    params = setup_simulation(script_options, cleanup)
+
+    pl_options = plotting_options(params, no_gui=True)
+    ms_options = measurement_set_options(params, no_gui=True)
+    gs_options = gains_options(params, no_gui=True)
+    vis_options = visibility_options(params, no_gui=True)
+    kld_options = kalcal_diag_options(params, no_gui=True)
+    klf_options = kalcal_full_options(params, no_gui=True)
+    qut_options = quartical_options(params, no_gui=True)
+
+    children = [
+        script_options.to_widget(),
+        pl_options.to_widget(),
+        ms_options.to_widget(),
+        gs_options.to_widget(),
+        vis_options.to_widget(),
+        kld_options.to_widget(),
+        klf_options.to_widget(),
+        qut_options.to_widget()
+    ]
+
+    tab = widgets.Tab()
+    tab.children = children
+    for i in range(len(children)):
+        tab.set_title(i, titles[i])
+
+    options = {
+        "script" : script_options,
+        "plots" : pl_options,
+        "gains" : gs_options,
+        "ms" : ms_options,
+        "vis" : vis_options,
+        "kalcal-diag" : kld_options,
+        "kalcal-full" : klf_options,
+        "quartical" : qut_options
+    }
+
+    display(tab)
+    return params, options

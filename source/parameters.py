@@ -12,10 +12,12 @@ from ipywidgets import (
     Button,
     HTML,
     AppLayout,
+    HBox,
     VBox,
     Layout,
     Dropdown
 )
+import logging
 
 
 class Settings:
@@ -29,6 +31,13 @@ class Settings:
         self.__items = dict()
         self.__labels = []
         self.__descriptions = []
+        logging.debug(f"Settings object created: `{name}`")
+
+    def __repr__(self) -> str:
+        return str(self.to_dict())
+    
+    def __str__(self) -> str:
+        return str(self.to_dict())
 
     def create(self, key, label, description, value):
         self.__labels.append(label)
@@ -65,6 +74,7 @@ class Settings:
 
     def __setitem__(self, key, item):
         self.create(key, *item)
+        logging.debug(f"Setting added: `{key}`")
 
     def __getitem__(self, key):
         if isinstance(key, list) or isinstance(key, tuple):
@@ -126,19 +136,22 @@ class Settings:
             btn.disabled = False
             self.__status.value = f"[{time_stamp}] Failed to save: {error}"
 
-    def __load(self, btn):
+    def __load(self, btn=None):
         time_stamp = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
         try:
-            btn.disabled = True
+            if btn != None:
+                btn.disabled = True
             if self.__immutable:
                 path = self.to_yaml(self.__name)
             else:
                 path = self.to_yaml(self.__config.value)
                 self.__name = self.__config.value
-            btn.disabled = False
+            if btn != None:
+                btn.disabled = False
             self.__status.value = f"[{time_stamp}] Loaded: <tt>{path}</tt>"
         except Exception as error:
-            btn.disabled = False
+            if btn != None:
+                btn.disabled = False
             self.__status.value = f"[{time_stamp}] Failed to load: {error}"
 
     def to_widget(self):
@@ -168,7 +181,8 @@ class Settings:
         # Create right sidebar (descriptions)
         center_bar = VBox(
             [HTML("<h2>Description</h2>")]
-            + [HTML(f"<em>{desc}</em>") for desc in self.__descriptions]
+            + [HBox([HTML(f"<b>{label}:</b>"), HTML(f"<em>{desc}</em>")]) 
+               for label, desc in zip(self.__labels, self.__descriptions)]
             + [self.__config, self.__status]
         )
 
@@ -183,7 +197,7 @@ class Settings:
             left_sidebar=left_sidebar,
             center=center_bar,
             right_sidebar=right_sidebar,
-            pane_widths=[1, 3, 3],
+            pane_widths=[1, 3, 2],
             layout=Layout(width="auto", height="40%"),
             justify_items="left",
         )
@@ -193,16 +207,19 @@ class Settings:
 
 class YamlDict(dict):
     def __init__(self, path, **kwargs):
+        logging.debug(f"Creating YamlDict for `{path}`")
         keys = kwargs.keys()
         self.__overwrite = kwargs["overwrite"] if "overwrite" in keys else False
         self.__freeze = kwargs["freeze"] if "freeze" in keys else False
+        logging.debug(f"Frozen? {self.__freeze}")
         self.__path = Path(path)
         super().__init__({})
         if not self.__overwrite:
             try:
                 self.__load()
+                logging.debug("Load from file")
             except:
-                pass
+                logging.debug("Load empty")
     
     @property
     def path(self):
@@ -210,11 +227,13 @@ class YamlDict(dict):
     
     def freeze(self):
         if not self.__freeze:
+            logging.debug("Set to freeze")
             self.__save()
             self.__freeze = True
         
     def unfreeze(self):
         if self.__freeze:
+            logging.debug("Set to unfreeze")
             self.__save()
             self.__freeze = False
 
@@ -233,6 +252,7 @@ class YamlDict(dict):
         super().__setitem__(key, value)
         if not self.__freeze:
             self.__save()
+        logging.debug(f"`{self.__path}` added: `{key}`")
         
     def __repr__(self) -> str:
         return super().__repr__()
