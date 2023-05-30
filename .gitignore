@@ -1,6 +1,21 @@
 # Ignore CASA tables
 table.*
 
+# Ignore repository specific files
+gains-config.yml
+kalcal-diag-config.yml
+kalcal-full-config.yml
+ms-config.yml
+params.yml
+paths.yml
+plot-config.yml
+quartical-config.yml
+visibility-config.yml
+
+# Ignore data files
+*.npz
+*.fits
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
