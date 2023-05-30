@@ -1,3 +1,9 @@
+numpy
+matplotlib
+scipy
+pyyaml
+numba
+ducc0
 simms
 quartical
 codex-africanus

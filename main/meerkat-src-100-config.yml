@@ -1,0 +1,8 @@
+config-dir: ''
+data-dir: ''
+log-level: 3-INFO
+mpl-dir: ''
+n-cpu: 4
+name: meerkat-src-100
+plots-dir: ''
+seed: 666
