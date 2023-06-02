@@ -14,11 +14,11 @@ def plotting_options(params, no_gui=False):
     
     logging.debug("Creating plotting options config")
     paths = params["paths"]
-    name = "plot-config.yml"
-    config_dir = paths["config-dir"]
-    with refreeze(paths) as file:
-        file["plot-config"] = str(config_dir / name)
-    logging.debug(f"Measurement set config at: `{paths['plot-config']}`")
+    name = "plot-options.yml"
+    options_dir = paths["options"]["dir"]
+    with refreeze(params):
+        paths["options"]["plots"] = options_dir / name
+    logging.debug(f"Plotting options config at: `{options_dir / name}`")
 
     settings = Settings(
         name=name,
@@ -26,7 +26,7 @@ def plotting_options(params, no_gui=False):
         description="""Defines the various settings required for plotting
         the different figures, such as figure size, font size, labels and
         so forth. Note, these are only defaults and can be changed inline.""",
-        directory=str(config_dir),
+        directory=options_dir,
         immutable_path=True,
     )
     logging.debug("Plotting Settings object created")
@@ -201,7 +201,6 @@ def setup_plotting(pl_options, params):
     logging.info("Updating parameter data")
     with refreeze(params):
         params["plots"] = plot_options
-        logging.debug("Parameter added: `plots`")
 
 def place_ticks(axes, tick_type=None):
     for ax in axes:
@@ -323,8 +322,11 @@ def create_amplitude_and_phase_signal_plot(ants, params, show=False):
     else:
         logging.info(f"No seed set")
 
-    plot_path = paths["plots-dir"] / "ch5-sim-gains.png"
-
+    if paths["plots"]["files"].get("ch5-sim-gains", False):
+        plot_path = paths["plots"]["files"]["ch5-sim-gains"]
+    else:
+        plot_path = paths["plots"]["dir"] / "ch5-sim-gains.png"
+        
     try:
         logging.debug("Checking for existing plot")
         check_for_data(plot_path)
@@ -333,7 +335,7 @@ def create_amplitude_and_phase_signal_plot(ants, params, show=False):
         return
     
     logging.info("Load the true-gains data")
-    true_path = paths["gains"]["true"]
+    true_path = paths["gains"]["true"]["files"]
     gains = load_data(true_path)
     
     amp_gains = gains["amp_gains"]
@@ -377,6 +379,9 @@ def create_amplitude_and_phase_signal_plot(ants, params, show=False):
     # Show plot
     logging.info(f"Saving figure to `{plot_path}`")
     plt.savefig(plot_path, dpi=plot_options["dpi"])
+
+    with refreeze(params):
+        paths["plots"]["files"]["ch5-sim-gains"] = plot_path
 
     if show:
         logging.info("Displaying amplitude and phase signal plot")

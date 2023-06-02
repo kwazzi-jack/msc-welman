@@ -415,13 +415,14 @@ def kalcal_diag(msname, **kwargs):
 def kalcal_diag_options(params, no_gui=False):
     logging.debug("Invoking function")
     
-    logging.debug("Creating kalcal-diag options config")
     paths = params["paths"]
+
+    logging.debug("Creating kalcal-diag options config")
     name = "kalcal-diag-config.yml"
-    config_dir = paths["config-dir"]
-    with refreeze(paths) as file:
-        file["kalcal-diag-config"] = str(Path(config_dir) / name)
-    logging.debug(f"kalcal-diag config at: `{paths['kalcal-diag-config']}`")
+    options_dir = paths["options"]["dir"]
+    with refreeze(params):
+        paths["options"]["kalcal-diag"] = options_dir / name
+    logging.debug(f"kalcal-diag options config at: `{options_dir / name}`")
 
     settings = Settings(
         name=name,
@@ -431,7 +432,7 @@ def kalcal_diag_options(params, no_gui=False):
         for the rest of the experiment. This includes which process
         noise parameters to use, paths to solutions, and where to
         find to solutions.""",
-        directory=str(config_dir),
+        directory=options_dir,
         immutable_path=True,
     )
 
@@ -508,8 +509,8 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
     if status == "DISABLED":
         logging.info("kalcal-diag is disabled, do nothing")
         logging.info("Updating parameter information")
-        with refreeze(params) as file:
-            file["kalcal-diag"] = {
+        with refreeze(params):
+            params["kalcal-diag"] = {
                 "status" : status,
                 "n-points" : n_points,
                 "prec" : prec,
@@ -521,82 +522,54 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
     sigma_fs = np.round(np.logspace(lb, ub, n_points), prec)
     logging.info("Calculated line search process noise parameters")
 
+    logging.info("Updating path data")
+    filter_paths = paths["gains"]["kalcal-diag"]["filter"]["files"]
+    filter_dir = paths["gains"]["kalcal-diag"]["filter"]["dir"]
+    filter_template = paths["gains"]["kalcal-diag"]["filter"]["template"]
+    smoother_paths = paths["gains"]["kalcal-diag"]["smoother"]["files"]
+    smoother_dir = paths["gains"]["kalcal-diag"]["smoother"]["dir"]
+    smoother_template = paths["gains"]["kalcal-diag"]["smoother"]["template"]
+    for percent in percents:
+        filter_paths[percent] = {}
+        smoother_paths[percent] = {}
+        for sigma_f in sigma_fs:
+            filter_paths[percent][sigma_f] = filter_dir / filter_template.format(
+                                                            mp=percent, sigma_f=sigma_f)
+            smoother_paths[percent][sigma_f] = smoother_dir / smoother_template.format(
+                                                            mp=percent, sigma_f=sigma_f)
+    refreeze(params)
+    solution_paths = [filter_paths[percent][sigma_f] for sigma_f in sigma_fs for percent in percents]
+    solution_paths += [smoother_paths[percent][sigma_f] for sigma_f in sigma_fs for percent in percents]
+
+    path = paths["gains"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    path = paths["gains"]["kalcal-diag"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    if not filter_dir.exists():
+        os.mkdir(filter_dir)
+    if not smoother_dir.exists():
+        os.mkdir(smoother_dir)
+
     try:
-        filter_paths = paths["gains"]["kalcal-diag"]["filter"]
-        smoother_paths = paths["gains"]["kalcal-diag"]["smoother"]
-        filter_keys = filter_paths.keys()
-        smoother_keys = smoother_paths.keys()
-
-        for percent in percents:
-            if percent not in filter_keys:
-                raise KeyError
-            
-            if percent not in smoother_keys:
-                raise KeyError
-            
-        for key in filter_keys:
-            if key not in percents:
-                raise KeyError
-
-        for key in smoother_keys:
-            if key not in percents:
-                raise KeyError
-        
-        logging.debug("Filter and smoother paths match")
-
-        try:
-            files = os.listdir(filter_paths["dir"])
-            if len(files):
-                check_for_data(*files)
-            files = os.listdir(smoother_paths["dir"])
-            if len(files):
-                check_for_data(*files)
-
-            os.remove(filter_paths["dir"])
-            while not os.path.exists(filter_paths["dir"]):
-                time.sleep(0.1)
-            os.mkdir(filter_paths["dir"])
-
-            os.remove(smoother_paths["dir"])
-            while not os.path.exists(smoother_paths["dir"]):
-                time.sleep(0.1)
-            os.mkdir(smoother_paths["dir"])
-            logging.debug("Deleted filter and smoother gains")
-        except DataExistsError:
-            logging.info("No deletion done, returning.")
-            return 
-        logging.debug("Gains folders exist, cleaned folders.")
-    except:
-        logging.info("Updating path data")
-        data_dir = paths["data-dir"]
-        with refreeze(paths) as file:
-            if file["gains"].get("kalcal-diag", True):
-                file["gains"]["kalcal-diag"] = {
-                    "dir" : data_dir / "gains" / "kalcal-diag"
-                }        
-                os.makedirs(paths["gains"]["kalcal-diag"]["dir"], 
-                            exist_ok=True)
-            kalcal_dir = file["gains"]["kalcal-diag"]
-
-            if kalcal_dir.get("filter", True):
-                file["gains"]["kalcal-diag"]["filter"] = {
-                    "dir" : data_dir / "gains" / "kalcal-diag" / "filter"
-                }
-                os.makedirs(paths["gains"]["kalcal-diag"]["filter"]["dir"], 
-                            exist_ok=True)
-
-            if kalcal_dir.get("smoother", True):
-                file["gains"]["kalcal-diag"]["smoother"] = {
-                    "dir" : data_dir / "gains" / "kalcal-diag" / "smoother"
-                }
-                os.makedirs(paths["gains"]["kalcal-diag"]["smoother"]["dir"], 
-                            exist_ok=True)
-        logging.debug("Gains folders missing, created.")
-
-    filter_dir = paths["gains"]["kalcal-diag"]["filter"]
-    smoother_dir = paths["gains"]["kalcal-diag"]["smoother"]
+        check_for_data(*solution_paths)
+        logging.debug("Creating new solutions")
+    except DataExistsError:
+        logging.info("No deletion done")
+        logging.info("Updating parameter information")
+        with refreeze(params):
+            params["kalcal-diag"] = {
+                "status" : status,
+                "n-points" : n_points,
+                "prec" : prec,
+                "low-bound": lb,
+                "up-bound": ub
+            }
+        return
+    
     total_runs = n_points * len(percents)
-    true_gains = load_data(paths["gains"]["true"])["true_gains"]
+    true_gains = load_data(paths["gains"]["true"]["files"])["gains"]
         
     if progress:
         pbar.total = total_runs
@@ -606,17 +579,12 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
                 + f"({total_runs} runs)")
     logging.info(rf"Using interval [1e{lb}, 1e{ub}].")
     for percent in percents:
-        filter_paths = []
-        smoother_paths = []
         for sigma_f in sigma_fs:
-            filter_path = filter_dir["dir"] / \
-                f"kalcal-diag-gains-filter-{percent}mp-sigma_f-{sigma_f}.npz"
-            smoother_path = smoother_dir["dir"] / \
-                f"kalcal-diag-gains-smoother-{percent}mp-sigma_f-{sigma_f}.npz" 
-
+            filter_path = filter_paths[percent][sigma_f]
+            smoother_path = smoother_paths[percent][sigma_f]
             start = time.time()
             kalcal_diag(
-                str(paths["ms-path"]),
+                str(paths["data"]["ms"]),
                 vis_column="DATA_100MP",
                 model_column=f"MODEL_{percent}MP",
                 sigma_f=float(sigma_f),
@@ -626,8 +594,6 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
             )
             end = time.time()
 
-            filter_paths.append(filter_path)
-            smoother_paths.append(smoother_path)
             log_msg = f"kalcal-diag on {percent}MP with "\
                     + f"`sigma_f={sigma_f:.3e}`, {(end - start):.3g}s taken"
                          
@@ -645,22 +611,16 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
                 pbar.update(1)
                 pbar.refresh()
 
-        logging.debug(f"Saving gains results to files for {percent}MP")    
-        with refreeze(paths) as file:
-            filter_dir[percent] = filter_paths
-            smoother_dir[percent] = smoother_paths   
-
+    logging.info("Calibration complete")
     logging.info("Updating parameter information")
-    with refreeze(params) as file:
-        file["kalcal-diag"] = {
-            "status" : status,
-            "n-points" : n_points,
-            "prec" : prec,
-            "low-bound": lb,
-            "up-bound": ub,
-            "sigma-fs" : sigma_fs
-        }
-
+    with refreeze(params):
+            params["kalcal-diag"] = {
+                "status" : status,
+                "n-points" : n_points,
+                "prec" : prec,
+                "low-bound": lb,
+                "up-bound": ub
+            }
 
 @njit(fastmath=True, nogil=True)
 def cholesky_inv(X):
@@ -985,13 +945,13 @@ def kalcal_full(msname, **kwargs):
 def kalcal_full_options(params, no_gui=False):
     logging.debug("Invoking function")
     
-    logging.debug("Creating kalcal-full options config")
     paths = params["paths"]
+    logging.debug("Creating kalcal-full options config")
     name = "kalcal-full-config.yml"
-    config_dir = paths["config-dir"]
-    with refreeze(paths) as file:
-        file["kalcal-full-config"] = str(Path(config_dir) / name)
-    logging.debug(f"kalcal-full config at: `{paths['kalcal-full-config']}`")
+    options_dir = paths["options"]["dir"]
+    with refreeze(params):
+        paths["options"]["kalcal-full"] = options_dir / name
+    logging.debug(f"kalcal-full options config at: `{options_dir / name}`")
 
     settings = Settings(
         name=name,
@@ -1001,7 +961,7 @@ def kalcal_full_options(params, no_gui=False):
         for the rest of the experiment. This includes which process
         noise parameters to use, paths to solutions, and where to
         find to solutions.""",
-        directory=str(config_dir),
+        directory=options_dir,
         immutable_path=True,
     )
 
@@ -1185,7 +1145,7 @@ def run_kalcal_full_calibration(kal_full_options, params,
 
             start = time.time()
             kalcal_full(
-                str(paths["ms-path"]),
+                str(paths["data"]["ms"]),
                 vis_column="DATA_100MP",
                 model_column=f"MODEL_{percent}MP",
                 sigma_f=float(sigma_f),
@@ -1233,13 +1193,13 @@ def run_kalcal_full_calibration(kal_full_options, params,
 def quartical_options(params, no_gui=False):
     logging.debug("Invoking function")
     
-    logging.debug("Creating QuartiCal options config")
     paths = params["paths"]
+    logging.debug("Creating QuartiCal options config")
     name = "quartical-config.yml"
-    config_dir = paths["config-dir"]
-    with refreeze(paths) as file:
-        file["quartical-config"] = str(Path(config_dir) / name)
-    logging.debug(f"QuartiCal config at: `{paths['quartical-config']}`")
+    options_dir = paths["options"]["dir"]
+    with refreeze(params):
+        paths["options"]["quartical"] = options_dir / name
+    logging.debug(f"QuartiCal options config at: `{options_dir / name}`")
 
     settings = Settings(
         name=name,
@@ -1249,7 +1209,7 @@ def quartical_options(params, no_gui=False):
         for the rest of the experiment. This includes which time-
         interval sizes to use, paths to solutions, and where to
         find to solutions.""",
-        directory=str(config_dir),
+        directory=options_dir,
         immutable_path=True,
     )
 
@@ -1262,7 +1222,7 @@ def quartical_options(params, no_gui=False):
     settings["t-ints"] = (
         "Time Intervals",
         "Time intervals to use in the line-search as a comma-separated list. Slices are allowed.",
-        "1:241",
+        "1:240",
     )
 
     settings["iters"] = (
@@ -1322,11 +1282,11 @@ def quartical_setup(quart_options, params):
     logging.debug("Invoking function")
     logging.info("Updating path data")
     paths = params["paths"]
-    config_dir = paths["config-dir"]
+    config_dir = paths["config"]["dir"]
     config_path = config_dir / "quartical.yml"
     
-    with refreeze(paths) as file:
-        paths["quartical"] = config_path
+    with refreeze(params):
+        paths["config"]["quartical"] = config_path
     
     try:
         check_for_data(config_path)
@@ -1341,29 +1301,30 @@ def quartical_setup(quart_options, params):
     iters = quart_options["iters"]
     conv_crit = quart_options["conv-crit"]
 
-    with refreeze(params) as file:
-        file["quartical"] = {
-            "status" : status,
-            "n-points" : len(t_ints),
-            "t-ints" : t_ints,
-            "iters" : iters,
-            "conv-crit" : conv_crit
-        }
+    with refreeze(params):
+        if params.get("quartical", True):
+            params["quartical"] = {}
+            
+        params["quartical"]["status"] = status
+        params["quartical"]["n-points"] = len(t_ints)
+        params["quartical"]["t-ints"] = t_ints
+        params["quartical"]["iters"] = iters
+        params["quartical"]["conv-crit"] = conv_crit
 
     try:
         n_time = params["n-time"]
     except:
-        n_time, n_ant = load_data(paths["gains"]["true"])["true_gains"].shape
-        with refreeze(params) as file:            
-            file["n-time"] = n_time
-            file["n-ant"] = n_ant
+        n_time, n_ant = load_data(paths["gains"]["true"]["files"])["gains"].shape
+        with refreeze(params):            
+            params["n-time"] = n_time
+            params["n-ant"] = n_ant
 
     logging.info("Creating QuartiCal config")    
     config = YamlDict(config_path, overwrite=True)
 
     logging.debug("Generate `input_ms` options")
     config["input_ms"] = {
-            "path": str(paths["ms-path"]),
+            "path": str(paths["data"]["ms"]),
             "data_column": "DATA_COLUMN",
             "sigma_column": "SIGMA_N",
             "time_chunk": 0,
@@ -1372,7 +1333,7 @@ def quartical_setup(quart_options, params):
 
     logging.debug("Generate `input_model` options")
     config["input_model"] = {
-                "recipe": "MODEL_COLUMN",
+            "recipe": "MODEL_COLUMN",
             "invert_uvw": False,
             "source_chunks": int(n_time),
             "apply_p_jones": False
@@ -1418,14 +1379,13 @@ def quartical_setup(quart_options, params):
         file["quartical"]["config"] = config
 
 
-def convert_quartical_to_codex(gains_path, runs_path, t_int, paths):
+def convert_quartical_to_codex(gains_path, runs_path, t_int, shape):
     logging.debug("Invoking function")    
     logging.debug("Loading true-gains")
-    true_gains = load_data(paths["gains"]["true"])["true_gains"]
-    n_time, n_ant = true_gains.shape
+    n_time, n_ant = shape
 
     logging.debug(f"Open QuartiCal solutions at `{runs_path}`")
-    codex_gains = np.zeros_like(true_gains)
+    codex_gains = np.zeros(shape, dtype=np.complex128)
 
     with zarr.open(runs_path, mode="r") as sol:
         quart_gains = sol.G.G_0.gains[:]
@@ -1469,76 +1429,74 @@ def run_quartical_calibration(quart_options, params,
     if status == "DISABLED":
         logging.info("QuartiCal is disabled, do nothing")
         logging.info("Updating parameter information")
-        with refreeze(params) as file:
-            file["quartical"]["n-points"] = n_points
+        with refreeze(params):
+            params["quartical"]["status"] = status
+            params["quartical"]["n-points"] = n_points
+            params["quartical"]["t-ints"] = t_ints
         return
     
-    logging.info("Retrieved line search t-ints parameters")
+    logging.info("Calculated line search process noise parameters")
+
+    logging.info("Updating path data")
+    quartical_paths = paths["gains"]["quartical"]["files"]
+    quartical_dir = paths["gains"]["quartical"]["dir"]
+    quartical_template = paths["gains"]["quartical"]["template"]
+
+    runs_paths = paths["runs"]["files"]
+    runs_dir = paths["runs"]["dir"]
+    runs_template = paths["runs"]["template"]
+
+    for percent in percents:
+        quartical_paths[percent] = {}
+        runs_paths[percent] = {}
+        for t_int in t_ints:
+            quartical_paths[percent][t_int] = quartical_dir / quartical_template.format(
+                                                            mp=percent, t_int=t_int)
+            
+            runs_paths[percent][t_int] = runs_dir / runs_template.format(
+                                                            mp=percent, t_int=t_int)
+        
+    refreeze(params)
+    solution_paths = [quartical_paths[percent][t_int] for t_int in t_ints for percent in percents]
+
+    path = paths["gains"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    if not quartical_dir.exists():
+        os.mkdir(quartical_dir)
 
     try:
-        gains_paths = paths["gains"]["quartical"]
-        gains_keys = gains_paths.keys()
-
-        for percent in percents:
-            if percent not in gains_keys:
-                raise KeyError
+        check_for_data(*solution_paths)
+        logging.debug("Creating new solutions")
+    except DataExistsError:
+        logging.info("No deletion done")
+        logging.info("Updating parameter information")
+        with refreeze(params):
+            params["quartical"]["status"] = status
+            params["quartical"]["n-points"] = n_points
+            params["quartical"]["t-ints"] = t_ints
             
-        for key in gains_keys:
-            if key not in percents:
-                raise KeyError
-        
-        logging.debug("QuartiCal paths match")
+        return    
 
-        try:
-            files = os.listdir(gains_paths["dir"])
-            if len(files):
-                check_for_data(*files)
-            os.remove(gains_paths["dir"])
-            while not os.path.exists(gains_paths["dir"]):
-                time.sleep(0.1)
-            os.mkdir(gains_paths["dir"])
-
-            logging.debug("Deleted QuartiCal gains")
-        except DataExistsError:
-            logging.info("No deletion done, returning.")
-            return 
-        
-        logging.debug("Gains folders exist, cleaned folders.")
-    except:
-        logging.info("Updating path data")
-        data_dir = paths["data-dir"]
-        with refreeze(paths) as file:
-            if file["gains"].get("quartical", True):
-                file["gains"]["quartical"] = {
-                    "dir" : data_dir / "gains" / "quartical"
-                }        
-                os.makedirs(paths["gains"]["quartical"]["dir"], 
-                            exist_ok=True)
-
-        logging.debug("Gains folders missing, created.")
-
-    gains_dir = paths["gains"]["quartical"]
-    runs_dir = paths["runs-dir"]
     total_runs = n_points * len(percents)
-    true_gains = load_data(paths["gains"]["true"])["true_gains"]
-        
+    true_gains = load_data(paths["gains"]["true"]["files"])["gains"]
+    shape = true_gains.shape
+    config_path = paths["config"]["quartical"]
+    
     if progress:
         pbar.total = total_runs
 
     logging.info(f"Running line-search on {n_points} points " \
                 + f"({total_runs} runs)")
     for percent in percents:
-        gains_paths = []
         for t_int in t_ints:
-            gains_path = gains_dir["dir"] / \
-                f"quartical-gains-{percent}mp-t_int-{t_int}.npz"
-            runs_path = runs_dir / \
-                f"quartical-run-{percent}mp-t_int-{t_int}" 
+            gains_path = quartical_paths[percent][t_int]
+            runs_path = runs_paths[percent][t_int] 
 
             model_column = f"MODEL_{percent}MP"
             vis_column = f"DATA_{percent}MP"
             quartical_args = [
-                "goquartical", paths["quartical"],
+                "goquartical", str(config_path),
                 f"input_ms.data_column='{vis_column}'",
                 f"input_model.recipe='{model_column}'",
                 f"output.gain_directory='{runs_path}'",
@@ -1552,8 +1510,7 @@ def run_quartical_calibration(quart_options, params,
                               stdout=fp, stderr=fp).wait()
             end = time.time()
 
-            convert_quartical_to_codex(gains_path, runs_path, t_int, paths)
-            gains_paths.append(gains_path)
+            convert_quartical_to_codex(gains_path, runs_path, t_int, shape)
 
             log_msg = f"QuartiCal on {percent}MP with "\
                     + f"`t-int={t_int}`, {(end - start):.3g}s taken"
@@ -1567,7 +1524,10 @@ def run_quartical_calibration(quart_options, params,
             if progress:
                 pbar.update(1)
                 pbar.refresh()
-
-        logging.debug(f"Saving gains results to files for {percent}MP")    
-        with refreeze(paths) as file:
-            gains_dir[percent] = gains_paths
+    
+    logging.info("QuartiCal calibration complete")
+    logging.info("Updating parameter information")
+    with refreeze(params):
+        params["quartical"]["status"] = status
+        params["quartical"]["n-points"] = n_points
+        params["quartical"]["t-ints"] = t_ints

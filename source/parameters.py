@@ -1,10 +1,13 @@
 import os
 from pathlib import Path
+from typing import Any
 import yaml
+import pickle
 from copy import copy
 from datetime import datetime
 from source.other import check_for_data
 from contextlib import contextmanager
+from dataclasses import dataclass
 from ipywidgets import (
     IntText,
     FloatText,
@@ -204,22 +207,33 @@ class Settings:
 
         return app
 
+class YamlLoader(yaml.SafeLoader):
+    pass
+
+def path_constructor(loader, node):
+    value = loader.construct_sequence(node)
+    return Path(*value)
+
+YamlLoader.add_constructor('tag:yaml.org,2002:python/object/apply:pathlib.PosixPath', path_constructor)
 
 class YamlDict(dict):
     def __init__(self, path, **kwargs):
         logging.debug(f"Creating YamlDict for `{path}`")
         keys = kwargs.keys()
         self.__overwrite = kwargs["overwrite"] if "overwrite" in keys else False
-        self.__freeze = kwargs["freeze"] if "freeze" in keys else False
-        logging.debug(f"Frozen? {self.__freeze}")
+        self.__freeze = False
         self.__path = Path(path)
         super().__init__({})
+
         if not self.__overwrite:
             try:
                 self.__load()
                 logging.debug("Load from file")
             except:
                 logging.debug("Load empty")
+                
+        self.__freeze = kwargs["freeze"] if "freeze" in keys else False
+        logging.debug(f"Frozen? {self.__freeze}")
     
     @property
     def path(self):
@@ -239,8 +253,8 @@ class YamlDict(dict):
 
     def __load(self):
         with open(self.__path, "r") as file:
-            new_dict = yaml.safe_load(file)
-
+            new_dict = yaml.load(file, Loader=YamlLoader)
+        print(new_dict)
         for key, value in new_dict.items():
             self.__setitem__(key, value)
 
@@ -268,5 +282,101 @@ def refreeze(x):
     finally:
         x.freeze() 
 
+
+class SmartFolder:
+    def __init__(self, path="") -> None:
+        if isinstance(path, str):
+            path = Path(path)
+        self.__path = path
+        self.__file_names = []
+        self.__files = []
+        self.__folder_names = []
+        self.__folders = []
+        
+        if self.__path.exists():
+            for item in map(Path, os.listdir(self.__path)):
+                full_item = self.__path / item
+                if full_item.is_file():
+                    name = os.path.splitext(item)[0].replace("-", "_")
+                    self.__file_names.append(name)
+                    self.__files.append(full_item)
+                elif full_item.is_dir():
+                    self.__folder_names.append(full_item.name)
+                    self.__folders.append(SmartFolder(full_item))
+        else:
+            self.__path.mkdir(parents=True)
+
+    def __getattr__(self, name):
+        name = name.replace("-", "_")
+
+        try:
+            if name in self.__file_names:
+                idx = self.__file_names.index(name)
+                return self.__files[idx]
+            elif name in self.__folder_names:
+                idx = self.__folder_names.index(name)
+                return self.__folders[idx]
+        except:
+            raise FileNotFoundError(f"The folder/file labelled {name} does not exist.")
+            
+    def __call__(self) -> Path:
+        return self.__path
+    
+    @property
+    def files(self):
+        return self.__files
+    
+    @property
+    def folders(self):
+        return self.__folders
+    
+    def refresh(self):
+        self = SmartFolder(self.__path)
+
+    def remove(self, name):
+        if name in self.__file_names:
+            idx = self.__file_names.index(name)
+            del self.__file_names[idx]
+            del self.__files[idx]
+
+    def exists(self):
+        return self.__path.exists() 
+    
+    def __repr__(self):
+        return self._tree_repr()
+    
+    def _tree_repr(self, level=0, is_last=False):
+        tree = ""
+        indent = "│   " * level
+        
+        if level > 0:
+            tree += f"{indent}"
+            
+            if is_last:
+                tree += "└── "
+            else:
+                tree += "├── "
+        
+        tree += f"{self.__path.name}/\n"
+        
+        if is_last:
+            indent += "    "
+        else:
+            indent += "│   "
+        
+        for i, file in enumerate(self.__files):
+            if i == len(self.__files) - 1:
+                tree += f"{indent}└── {file.name}\n"
+            else:
+                tree += f"{indent}├── {file.name}\n"
+        
+        for i, folder in enumerate(self.__folders):
+            if i == len(self.__folders) - 1:
+                tree += folder._tree_repr(level + 1, is_last=True)
+            else:
+                tree += folder._tree_repr(level + 1)
+        
+        return tree
+    
 def get_parameters(ms_options, gains_options, options, clean=False, force=False):
     pass

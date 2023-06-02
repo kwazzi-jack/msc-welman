@@ -122,15 +122,39 @@ def __setup_logging(options):
     logger.addHandler(file_handler)
 
 
-def __generate_dir_skeleton(paths, cleanup=False):
+def __generate_dir_skeleton(params, cleanup=False):
     logging.info("Creating directory paths")
-    main_dir = paths["main-dir"]
-    config_dir = paths["config-dir"]
-    data_dir = paths["data-dir"]
-    plots_dir = paths["plots-dir"]
-    runs_dir = paths["runs-dir"]
+    paths = params["paths"]
 
-    dirs = [main_dir, config_dir, data_dir, plots_dir, runs_dir]
+    dirs = [
+        paths["main"]["dir"], 
+        paths["config"]["dir"], 
+        paths["data"]["dir"],
+        paths["gains"]["dir"],
+        paths["gains"]["true"]["dir"],
+        paths["gains"]["kalcal-diag"]["filter"]["dir"],
+        paths["gains"]["kalcal-diag"]["smoother"]["dir"],
+        paths["gains"]["kalcal-full"]["filter"]["dir"],
+        paths["gains"]["kalcal-full"]["smoother"]["dir"],
+        paths["gains"]["quartical"]["dir"],
+        paths["fluxes"]["dir"],
+        paths["fluxes"]["true"]["dir"],
+        paths["fluxes"]["kalcal-diag"]["filter"]["dir"],
+        paths["fluxes"]["kalcal-diag"]["smoother"]["dir"],
+        paths["fluxes"]["kalcal-full"]["filter"]["dir"],
+        paths["fluxes"]["kalcal-full"]["smoother"]["dir"],
+        paths["fluxes"]["quartical"]["dir"],
+        paths["fits"]["dir"],
+        paths["fits"]["true"]["dir"],
+        paths["fits"]["kalcal-diag"]["filter"]["dir"],
+        paths["fits"]["kalcal-diag"]["smoother"]["dir"],
+        paths["fits"]["kalcal-full"]["filter"]["dir"],
+        paths["fits"]["kalcal-full"]["smoother"]["dir"],
+        paths["fits"]["quartical"]["dir"], 
+        paths["plots"]["dir"], 
+        paths["runs"]["dir"]
+    ]
+
     if cleanup:
         try:
             check_for_data(*dirs)
@@ -146,18 +170,14 @@ def __generate_dir_skeleton(paths, cleanup=False):
     for path in dirs:
         try:
             os.makedirs(path)
-            while not os.path.exists(path):
+            while not path.exists():
                 time.sleep(0.1)
             logging.debug(f"Created: `{path}`")
         except OSError:
             logging.debug(f"Exists, do nothing: `{path}`")
 
-    refreeze(paths)
-    logging.info("Path data saved to file")
-
-
-def __set_thread_count(options):
-    n_cpu = "8" if options["n-cpu"] == None else str(options["n-cpu"])
+def __set_thread_count(params):
+    n_cpu = "8" if params["n-cpu"] == None else str(params["n-cpu"])
     logging.info(f"Setting thread count to {n_cpu}")
 
     for env_var in ["OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS"]:
@@ -170,10 +190,10 @@ def __set_thread_count(options):
         logging.debug(f"Setting `{env_var}` to {n_cpu}")
 
 
-def __set_random_seed(options):
+def __set_random_seed(params):
     import numpy, random
 
-    seed = 666 if options["seed"] == None else options["seed"]
+    seed = 666 if params["seed"] == None else params["seed"]
     logging.info(f"Setting random state seed to {seed}")
     numpy.random.seed(seed)
     logging.debug(f"`numpy` seed set to {seed}")
@@ -181,85 +201,194 @@ def __set_random_seed(options):
     logging.debug(f"`random` seed set to {seed}")
 
 
-def __set_matplotlib_dir(options):
-    dirname = options["mpl-dir"]
+def __set_matplotlib_dir(params):
+    dirname = params["mpl-dir"]
     if len(dirname):
         logging.info(f"Setting matplotlib config directory to {dirname}")
         os.environ["MPLCONFIGDIR"] = dirname
     else:
         logging.info(f"Matplotlib config directory unchanged")
 
-
-def __set_paths(options, cleanup=False):
+def __set_params(options):
     logging.info("Fetching directory paths")
     main_dir = Path(options["name"])
-    logging.debug(f"Identified main directory: `{main_dir}`")
     config_dir = (
         main_dir / "config"
         if len(options["config-dir"]) == 0
         else Path(options["config-dir"])
     )
-    logging.debug(f"Identified config directory: `{config_dir}`")
     data_dir = (
         main_dir / "data"
         if len(options["data-dir"]) == 0
         else Path(options["data-dir"])
     )
-    logging.debug(f"Identified data directory: `{data_dir}`")
     plots_dir = (
         main_dir / "plots"
         if len(options["plots-dir"]) == 0
         else Path(options["plots-dir"])
     )
-    logging.debug(f"Identified plots directory: `{plots_dir}`")
     runs_dir = data_dir / "runs"
-    logging.debug(f"Identified quartical runs directory: `{runs_dir}`")
-    path_name = config_dir / "paths.yml"
-    logging.debug(f"Identified path file: `{path_name}`")
-    log_name = options["name"] + ".log"
-    logging.debug(f"Identified log file: `{log_name}`")
-
-    logging.info("Creating new path data")
-    path_config = YamlDict(path_name, freeze=True, overwrite=cleanup)
-    logging.debug("Path config file created, set to frozen")
-
-    logging.debug("Setting path data as previously identified")
-    path_config["main-dir"] = main_dir
-    path_config["config-dir"] = config_dir
-    path_config["data-dir"] = data_dir
-    path_config["plots-dir"] = plots_dir
-    path_config["runs-dir"] = runs_dir
-    path_config["log"] = log_name
-    path_config["main-config"] = options.path
-
-    logging.info("Completed and returning paths")
-    return path_config
-
-
-def __set_params(paths, options, cleanup=False):
-    config_dir = paths["config-dir"]
     path_name = config_dir / "params.yml"
+
+    try:
+        check_for_data(path_name)
+        logging.info("Replacing parameter data")
+    except DataExistsError:
+        logging.info("Using saved parameter data")
+        return YamlDict(path_name, freeze=True)
+    
     logging.info("Creating new parameter data")
-    param_config = YamlDict(path_name, freeze=True, overwrite=cleanup)
+    params = YamlDict(path_name, freeze=True, overwrite=True)
     logging.debug("Parameter config file created, set to frozen")
-    logging.debug("Setting parameter data")
+    
+    logging.info("Setting path information")
 
-    with refreeze(param_config) as file:
-        file["n-cpu"] = options["n-cpu"]
-        file["seed"] = options["seed"]
-        file["paths"] = paths
+    params["paths"] = {
+        "main": {"dir": main_dir, "files": {}},
+        "config": {"dir": config_dir, "files": {}},
+        "options": {"dir": config_dir, "files": {}},
+        "data": {"dir": data_dir, "files": {}},
+        "gains": {
+            "dir": data_dir / "gains",
+            "true": {
+                "dir": data_dir / "gains" / "true",
+                "template" : "true-gains.npz",
+                "files" : {}
+            },
+            "kalcal-diag": {
+                "dir": data_dir / "gains" / "kalcal-diag",
+                "filter": {
+                    "dir": data_dir / "gains" / "kalcal-diag" / "filter",
+                    "template" : "diag-filter-gains-{mp}mp-sigma_f-{sigma_f}.npz",
+                    "files" : {}
+                },
+                "smoother": {
+                    "dir": data_dir / "gains" / "kalcal-diag" / "smoother",
+                    "template" : "diag-smoother-gains-{mp}mp-sigma_f-{sigma_f}.npz",
+                    "files" : {}
+                }
+            },
+            "kalcal-full": {
+                "dir": data_dir / "gains" / "kalcal-full",
+                "filter": {
+                    "dir": data_dir / "gains" / "kalcal-full" / "filter",
+                    "template" : "full-filter-gains-{mp}mp-sigma_f-{sigma_f}.npz",
+                    "files" : {}
+                },
+                "smoother": {
+                    "dir": data_dir / "gains" / "kalcal-full" / "smoother",
+                    "template" : "full-smoother-gains-{mp}mp-sigma_f-{sigma_f}.npz",
+                    "files" : {}
+                }
+            },
+            "quartical": {
+                "dir": data_dir / "gains" / "quartical",
+                "template" : "quartical-gains-{mp}mp-t_int-{t_int}.npz",
+                "files" : {}
+            }
+        },
+        "fluxes": {
+            "dir": data_dir / "fluxes",
+            "true": {
+                "dir": data_dir / "fluxes" / "true",
+                "template": "model-{mp}mp.npz",
+                "files": {}
+            },
+            "kalcal-diag": {
+                "dir": data_dir / "fluxes" / "kalcal-diag",
+                "filter": {
+                    "dir": data_dir / "fluxes" / "kalcal-diag" / "filter",
+                    "template" : "diag-filter-fluxes-{mp}mp-sigma_f-{sigma_f}.npz",
+                    "files": {}
+                },
+                "smoother": {
+                    "dir": data_dir / "fluxes" / "kalcal-diag" / "smoother",
+                    "template" : "diag-smoother-fluxes-{mp}mp-sigma_f-{sigma_f}.npz",
+                    "files": {}
+                    }
+            },
+            "kalcal-full": {
+                "dir": data_dir / "fluxes" / "kalcal-full",
+                "filter": {
+                    "dir": data_dir / "fluxes" / "kalcal-full" / "filter",
+                    "template" : "full-filter-fluxes-{mp}mp-sigma_f-{sigma_f}.npz",
+                    "files": {}
+                    },
+                "smoother": {
+                    "dir": data_dir / "fluxes" / "kalcal-full" / "smoother",
+                    "template" : "full-smoother-fluxes-{mp}mp-sigma_f-{sigma_f}.npz",
+                    "files": {}
+                    }
+            },
+            "quartical": {
+                "dir": data_dir / "fluxes" / "quartical",
+                "template" : "quartical-fluxes-{mp}mp-t_int-{t_int}.npz",
+                    "files": {}
+            }
+        },
+        "fits": {
+            "dir": data_dir / "fits",
+            "true": {
+                "dir": data_dir / "fits" / "true",
+                "template": "true",
+                "files": {}
+            },
+            "kalcal-diag": {
+                "dir": data_dir / "fits" / "kalcal-diag",
+                "filter": {
+                    "dir": data_dir / "fits" / "kalcal-diag" / "filter",
+                    "template" : "diag-filter-fits-{mp}mp-sigma_f-{sigma_f}",
+                    "files": {}
+                },
+                "smoother": {
+                    "dir": data_dir / "fits" / "kalcal-diag" / "smoother",
+                    "template" : "diag-smoother-fits-{mp}mp-sigma_f-{sigma_f}",
+                    "files": {}
+                    }
+            },
+            "kalcal-full": {
+                "dir": data_dir / "fits" / "kalcal-full",
+                "filter": {
+                    "dir": data_dir / "fits" / "kalcal-full" / "filter",
+                    "template" : "full-filter-fits-{mp}mp-sigma_f-{sigma_f}",
+                    "files": {}
+                    },
+                "smoother": {
+                    "dir": data_dir / "fits" / "kalcal-full" / "smoother",
+                    "template" : "full-smoother-fits-{mp}mp-sigma_f-{sigma_f}",
+                    "files": {}
+                    }
+            },
+            "quartical": {
+                "dir": data_dir / "fits" / "quartical",
+                "template" : "quartical-fits-{mp}mp-t_int-{t_int}",
+                    "files": {}
+            }
+        },
+        "runs": {
+            "dir": runs_dir, 
+            "template": "quartical-run-{mp}mp-t_int-{t_int}", 
+            "files": {}
+            },
+        "plots": {"dir": plots_dir, "files": {}}
+    }
 
+    logging.info("Fetching script options")
+    params["mpl-dir"] = options["mpl-dir"]
+    params["seed"] = options["seed"]
+    params["n-cpu"] = options["n-cpu"]
+
+    refreeze(params)
     logging.info("Completed and returning parameters")
-    return param_config
+    return params
 
 def setup_simulation(options, cleanup=False):
     __setup_logging(options)
-    paths = __set_paths(options, cleanup)
-    __generate_dir_skeleton(paths, cleanup)
-    __set_thread_count(options)
-    __set_random_seed(options)
-    __set_matplotlib_dir(options)
-    params = __set_params(paths, options, cleanup)
+    params = __set_params(options)
+    __generate_dir_skeleton(params, cleanup)
+    __set_thread_count(params)
+    __set_random_seed(params)
+    __set_matplotlib_dir(params)
     logging.info("Simulation setup complete")
     return params
 

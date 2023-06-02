@@ -22,18 +22,18 @@ def measurement_set_options(params, no_gui=False):
     
     logging.debug("Creating measurement set options config")
     paths = params["paths"]
-    name = "ms-config.yml"
-    config_dir = paths["config-dir"]
-    with refreeze(paths) as file:
-        file["ms-config"] = str(Path(config_dir) / name)
-    logging.debug(f"Measurement set config at: `{paths['ms-config']}`")
+    name = "ms-options.yml"
+    options_dir = paths["options"]["dir"]
+    with refreeze(params):
+        paths["options"]["ms"] = options_dir / name
+    logging.debug(f"Measurement set config at: `{options_dir / name}`")
 
     settings = Settings(
         name=name,
         header="Measurement Set",
         description="""Settings to generate an empty measurement set for the simulation.
         It leverages the software `simms` to create a suitable database for this experiment.""",
-        directory=str(config_dir),
+        directory=options_dir,
         immutable_path=True,
     )
     logging.debug("Measurement Set Settings object created")
@@ -106,31 +106,18 @@ def measurement_set_options(params, no_gui=False):
 def create_empty_measurement_set(ms_options, params, verbose=False):
     logging.debug("Invoking function")
 
+    logging.debug("Retrieve measurement set options")
     paths = params["paths"]
-    logging.info("Retrieving measurement set options")
-
     telescope = str(ms_options["telescope"]).lower()
-    logging.debug(f"Identified option: `telescope={telescope}`")
-
     ms_name = ms_options["ms-name"] if len(ms_options["ms-name"]) else f"{telescope}.ms"
-    logging.debug(f"Identified option: `ms-name={ms_name}`")
-
     ra, dec = ms_options["ra", "dec"]
-    logging.debug(f"Identified option: `ra={ra}`")
-    logging.debug(f"Identified option: `dec={dec}`")
-
     st, dt = ms_options["synth-time", "d-time"]
-    logging.debug(f"Identified option: `synth-time={st}`")
-    logging.debug(f"Identified option: `d-time={dt}`")
-
     freq_0 = ms_options["freq-0"]
-    logging.debug(f"Identified option: `freq-0={freq_0}`")
 
-    data_dir = paths["data-dir"]
-
+    data_dir = paths["data"]["dir"]
     try:
+        ms_path = paths["data"]["ms"]
         logging.debug("Using existing path")
-        ms_path = paths["ms-path"]
     except:
         logging.debug("Create new path")
         ms_path = data_dir / ms_name
@@ -194,31 +181,26 @@ def create_empty_measurement_set(ms_options, params, verbose=False):
             Popen(simms_args).wait()
 
         logging.info("Updating path and parameter data")
-        with refreeze(paths) as file:
-            file["ms-path"] = ms_path
-            logging.debug(f"Added to paths: `{ms_path}`")
+        with refreeze(params):
+            params["telescope"] = telescope
+            params["ra"] = ra
+            params["dec"] = dec
+            params["st"] = st
+            params["dt"] = dt
+            params["freq_0"] = freq_0
+            paths["data"]["ms"] = ms_path
 
-        logging.debug("Opening measurement set")
-        with table(str(ms_path), ack=False) as tb:
-            ANT1 = tb.getcol("ANTENNA1")
-            ANT2 = tb.getcol("ANTENNA2")
-
-        n_ant = np.max((ANT1.max(), ANT2.max())) + 1
-        n_time = st * 3600 // dt
-
-        with refreeze(params) as file:
-            file["n-ant"] = n_ant
-            file["n-time"] = n_time
-            file["n-chan"] = 1
-            file["n-dir"] = 1
-            file["n-corr"] = 1
-
-        logging.info(f"New measurement set created at `{ms_name}`")
+        logging.info(f"New measurement set created at `{ms_path}`")
     except:
-        logging.info(f"Keep original measurement set at `{ms_name}`")
+        logging.info(f"Keep original measurement set at `{ms_path}`")
         logging.info("Updating path and parameter data")
-        with refreeze(paths) as file:
-            file["ms-path"] = ms_path
+        with refreeze(params):
+            params["ra"] = ra
+            params["dec"] = dec
+            params["st"] = st
+            params["dt"] = dt
+            params["freq_0"] = freq_0
+            paths["data"]["ms"] = ms_path
 
 
 def gains_options(params, no_gui=False):
@@ -226,12 +208,11 @@ def gains_options(params, no_gui=False):
 
     logging.debug("Creating gains options config")
     paths = params["paths"]
-
     name = "gains-config.yml"
-    config_dir = paths["config-dir"]
-    with refreeze(paths) as file:
-        file["gains-config"] = config_dir / name    
-    logging.debug(f"Gains options config at: `{paths['ms-config']}`")
+    options_dir = paths["options"]["dir"]
+    with refreeze(params):
+        paths["options"]["gains"] = options_dir / name
+    logging.debug(f"Measurement set config at: `{options_dir / name}`")
     
     settings = Settings(
         name=name,
@@ -246,7 +227,7 @@ def gains_options(params, no_gui=False):
         generated, they are combined to create the final complex
         gains signal and saved to file.
         """,
-        directory=config_dir,
+        directory=options_dir,
         immutable_path=True,
     )
     logging.debug("Gains options object created")
@@ -372,38 +353,44 @@ def create_gains_signal(gs_options, params):
         logging.info(f"No seed set")
 
     logging.info("Updating path data")
-    try:
-        true_path = paths["gains"]["true"]
+    true_path = paths["gains"]["true"].get("files", False)
+    if true_path and isinstance(true_path, Path):
+        true_path = paths["gains"]["true"]["files"]
         logging.debug("True gains path exists, do nothing")
-    except:
-        data_dir = paths["data-dir"]
-        with refreeze(paths) as file:
-            if paths.get("gains", True):
-                file["gains"] = {
-                    "dir" : data_dir / "gains"
-                }        
-                os.makedirs(paths["gains"]["dir"], 
-                            exist_ok=True)
-            gains_dir = file["gains"]
+    else:
+        true_path = paths["gains"]["true"]["dir"] / paths["gains"]["true"]["template"]
+        logging.debug(f"True gains path does not exist, create new one: {true_path}")
 
-            if gains_dir.get("true", True):
-                gains_dir["true"] = gains_dir["dir"] / "true" / "true-gains.npz"        
-                os.makedirs(gains_dir["dir"] / "true", 
-                            exist_ok=True)
-        true_path = paths["gains"]["true"]
+    logging.debug("Check if directories exist")
+    path = paths["gains"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    path = paths["gains"]["true"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
 
-    logging.info(f"Retrieving information from `{paths['ms-path']}`")
-    with table(str(paths["ms-path"]), ack=False) as tb:
+    try:
+        check_for_data(true_path)
+        logging.info("Creating new true gains")
+    except DataExistsError:
+        logging.info("Using existing gains")
+        logging.info("Updating path and parameter data")
+        with refreeze(params):
+            paths["gains"]["true"]["files"] = true_path
+        return
+    
+    logging.info(f"Retrieving information from `{paths['data']['ms']}`")
+    with table(str(paths["data"]["ms"]), ack=False) as tb:
         TIME = tb.getcol("TIME")
         ANT1 = tb.getcol("ANTENNA1")
         ANT2 = tb.getcol("ANTENNA2")
 
     # Open field subtable and retrieve data
-    with table(str(paths["ms-path"]) + "::FIELD", ack=False) as tb:
+    with table(str(paths["data"]["ms"]) + "::FIELD", ack=False) as tb:
         PHASE_DIR = tb.getcol("PHASE_DIR").astype(np.float64)
         
     # Open spectral subtable and retrieve data
-    with table(str(paths["ms-path"]) + "::SPECTRAL_WINDOW", ack=False) as tb:
+    with table(str(paths["data"]["ms"]) + "::SPECTRAL_WINDOW", ack=False) as tb:
         FREQ = tb.getcol("CHAN_FREQ").flatten()[0].astype(np.float64)
         
     # Time indices and axis size
@@ -421,12 +408,12 @@ def create_gains_signal(gs_options, params):
     shape = (n_time, n_ant, n_chan, n_dir, n_corr)
 
     logging.debug("Updating dimension information")
-    with refreeze(params) as file:
-        file["n-ant"] = n_ant
-        file["n-time"] = n_time
-        file["n-chan"] = n_chan
-        file["n-dir"] = n_dir
-        file["n-corr"] = n_corr
+    with refreeze(params):
+        params["n-ant"] = n_ant
+        params["n-time"] = n_time
+        params["n-chan"] = n_chan
+        params["n-dir"] = n_dir
+        params["n-corr"] = n_corr
 
     # Create lm-array
     lm = np.array(radec_to_lm(PHASE_DIR.reshape(1, -1)))
@@ -485,13 +472,6 @@ def create_gains_signal(gs_options, params):
         logging.debug("Phase is unity")
         complex_gains = np.ones(shape)
         logging.debug("Final complex gains created from amplitude and phase")
-
-    try:
-        logging.debug("Checking for existing true gains")
-        check_for_data(true_path)
-    except:
-        logging.info("No deletion done")
-        return true_path
     
     logging.info(f"Codex shape: (N_ant, N_time, N_chan, N_dir, N_corr) = {shape}")
     logging.info("Saving gains to file")
@@ -502,8 +482,10 @@ def create_gains_signal(gs_options, params):
             phase_gains=phase_gains
             )
 
-    logging.info(f"New simulated gains at `{paths['gains']['true']}`")
-
+    logging.info(f"New simulated gains at `{true_path}`")
+    logging.info("Updating path and parameter data")
+    with refreeze(params):
+            paths["gains"]["true"]["files"] = true_path
 
 def load_data(path):
     logging.debug("Invoking function")
@@ -536,10 +518,10 @@ def visibility_options(params, no_gui=False):
     paths = params["paths"]
 
     name = "visibility-config.yml"
-    config_dir = paths["config-dir"]
-    with refreeze(paths) as file:
-        file["visibility-config"] = config_dir / name    
-    logging.debug(f"Visibility options config at: `{paths['visibility-config']}`")
+    options_dir = paths["options"]["dir"]
+    with refreeze(params):
+        paths["options"]["vis"] = options_dir / name    
+    logging.debug(f"Visibility options config at: `{options_dir / name}`")
     
     settings = Settings(
         name=name,
@@ -549,7 +531,7 @@ def visibility_options(params, no_gui=False):
         sky to be used within the simulation and the creation of
         visibility data.
         """,
-        directory=config_dir,
+        directory=options_dir,
         immutable_path=True,
     )
     logging.debug("Visibility options object created")
@@ -677,30 +659,44 @@ def create_skymodels(vis_options, params,
     
     percents = list(map(int, vis_options["percents"].replace(" ", "").split(",")))
 
+    logging.info("Updating path data")
+    true_paths = paths["fluxes"]["true"]["files"]
     try:
-        true_paths = paths["fluxes"]["true"]
-        keys = true_paths.keys()
-        for percent in percents:
-            if percent not in keys:
-                raise KeyError
-        for key in keys:
-            if key not in percents:
-                raise KeyError
-        logging.debug("True flux paths exist, do nothing")
-    except:
-        logging.info("Updating path data")
-        data_dir = paths["data-dir"]
-        with refreeze(paths) as file:
-            file["fluxes"] = {"dir": data_dir / "fluxes"}
-            file["fluxes"]["true"] = {
-                "dir" : data_dir / "fluxes" / "true"
-            }
-            base_dir = file["fluxes"]["true"]["dir"]
+        if true_paths:
+            true_keys = true_paths.keys()
             for percent in percents:
-                file["fluxes"]["true"][percent] = base_dir / f"model-{percent}mp.npz"
-        true_paths = paths["fluxes"]["true"]
-        os.makedirs(paths["fluxes"]["dir"], exist_ok=True)
-        os.makedirs(paths["fluxes"]["true"]["dir"], exist_ok=True)
+                if percent not in true_keys:
+                    raise KeyError
+            
+            for percent in true_keys:
+                if percent not in percents:
+                    raise KeyError
+                
+            logging.debug("True fluxes paths exists, do nothing")
+        else:
+            raise KeyError
+    except KeyError:
+        logging.debug("True fluxes paths do not exist, create new ones")
+        template = paths["fluxes"]["true"]["template"]
+        base_dir = paths["fluxes"]["true"]["dir"]
+        with refreeze(params):
+            for percent in percents:
+                true_paths[percent] = base_dir / template.format(mp=percent)
+
+    logging.debug("Check if directories exist")
+    path = paths["fluxes"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    path = paths["fluxes"]["true"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+
+    try:
+        check_for_data(*true_paths.values())
+        logging.info("Creating new true fluxes")
+    except DataExistsError:
+        logging.info("Using existing true fluxes")
+        return
 
     # Model Parameters
     logging.info("Fetching skymodel information")
@@ -715,23 +711,23 @@ def create_skymodels(vis_options, params,
     layout = vis_options["layout"]
 
     logging.info("Updating parameter information")
-    with refreeze(params) as file:
-        file["percents"] = percents
-        file["peak-flux"] = peak_flux
-        file["n-src"] = n_src
-        file["alpha"] = alpha
-        file["fov"] = fov
-        file["min_flux"] = min_flux
-        file["buffer"] = buffer
-        file["sampling"] = sampling
-        file["dist"] = dist
-        file["layout"] = layout
+    with refreeze(params):
+        params["percents"] = percents
+        params["peak-flux"] = peak_flux
+        params["n-src"] = n_src
+        params["alpha"] = alpha
+        params["fov"] = fov
+        params["min-flux"] = min_flux
+        params["buffer"] = buffer
+        params["sampling"] = sampling
+        params["dist"] = dist
+        params["layout"] = layout
 
     logging.debug("Calculating cell-size and n-pix")
-    with table(str(paths["ms-path"]), ack=False) as tb:
+    with table(str(paths["data"]["ms"]), ack=False) as tb:
         UVW = tb.getcol("UVW")
         
-    with table(str(paths["ms-path"]) + "::SPECTRAL_WINDOW", ack=False) as tb:
+    with table(str(paths["data"]["ms"]) + "::SPECTRAL_WINDOW", ack=False) as tb:
         FREQ = tb.getcol("CHAN_FREQ").flatten()[0]
 
     uv_max = np.abs(UVW[:, 0:2]).max()
@@ -798,13 +794,6 @@ def create_skymodels(vis_options, params,
         logging.error("Other layouts not yet completed.")
         raise NotImplementedError("Other layouts not yet implemented.")
     
-    try:
-        logging.debug("Checking for existing true gains")
-        check_for_data(*[true_paths[percent] for percent in percents])
-    except:
-        logging.info("No deletion done")
-        return true_paths
-    
     logging.info("Creating model images")
     for i, percent in enumerate(percents):
         logging.debug(f"Model image for percent={percent}")
@@ -842,34 +831,38 @@ def create_visibilities(vis_options, params):
     tol = vis_options["tol"]
     
     logging.debug("Fetching table information")
-    with table(str(paths["ms-path"]), ack=False) as tb:
+    with table(str(paths["data"]["ms"]), ack=False) as tb:
         TIME = tb.getcol("TIME")
         ANT1 = tb.getcol("ANTENNA1")
         ANT2 = tb.getcol("ANTENNA2")
         UVW = tb.getcol("UVW")
         
     # Open spectral subtable and retrieve data
-    with table(str(paths["ms-path"]) + "::SPECTRAL_WINDOW", ack=False) as tb:
+    with table(str(paths["data"]["ms"]) + "::SPECTRAL_WINDOW", ack=False) as tb:
         FREQ = tb.getcol("CHAN_FREQ").flatten()
 
     logging.info("Load the true-gains data")
-    true_path = paths["gains"]["true"]
+    true_path = paths["gains"]["true"]["files"]
     gains = load_data(true_path)
-    true_gains = gains["true_gains"][:, :, None, None, None]
+    true_gains = gains["gains"][:, :, None, None, None]
     changeAll = False
 
-    try:
-        percents = params["percents"]
-    except:
-        percents = list(map(int, vis_options["percents"].replace(" ", "").split(",")))
-        with refreeze(params) as file:
-            file["percents"] = percents
+    percents = params.get("percents", False)
+    new_percents = list(map(int, vis_options["percents"].replace(" ", "").split(",")))
+    if not percents or set(percents) != set(new_percents):
+        with refreeze(params):
+            params["percents"] = new_percents
+
+    with refreeze(params):
+        params["sigma-n"] = sigma_n
+        params["tol"] = tol
+
+    true_paths = paths["fluxes"]["true"]["files"]
 
     logging.info("Generating visibilities")
     for percent in percents:
-        
         logging.debug("Load skymodel data")
-        skymodel = load_data(paths["fluxes"]["true"][percent]) 
+        skymodel = load_data(true_paths[percent]) 
         model = skymodel["model"]
         cell_rad = skymodel["cell_rad"]
         
@@ -899,8 +892,8 @@ def create_visibilities(vis_options, params):
         
         vis = clean_vis + noise
         
-        logging.info(f"Saving visibilities to `{paths['ms-path']}`")
-        with table(str(paths["ms-path"]), readonly=False, ack=False) as tb:
+        logging.info(f"Saving {percent}MP visibilities to `{paths['data']['ms']}`")
+        with table(str(paths["data"]["ms"]), readonly=False, ack=False) as tb:
             
             for column in ["noise", "model", "clean", "data"]:
                 desc = tb.getcoldesc("DATA")
@@ -940,7 +933,7 @@ def create_visibilities(vis_options, params):
     # Weight Value for all visibilities
     W = 1.0/(2.0 * sigma_n**2)
 
-    with table(str(paths["ms-path"]), readonly=False, ack=False) as tb:
+    with table(str(paths["data"]["ms"]), readonly=False, ack=False) as tb:
         # Create sigma_n column
         desc = tb.getcoldesc("WEIGHT")
         desc["name"] = f"SIGMA_N"
@@ -966,8 +959,7 @@ def create_visibilities(vis_options, params):
                     return
             
         weights = tb.getcol("WEIGHT")
-        
-        if weights[0, 0] and not changeAll:
+        if not np.isclose(weights[0, 0], 0) and not np.isclose(weights[0, 0], 1) and not changeAll:
             logging.warning(f"Column `WEIGHT` has non-zero data")
             choice = input(f"Replace `WEIGHT`? (y/n) ")
 
