@@ -330,19 +330,19 @@ def __set_params(options):
             "dir": data_dir / "fits",
             "true": {
                 "dir": data_dir / "fits" / "true",
-                "template": "true",
+                "template": "true-{itype}-{mp}mp.fits",
                 "files": {}
             },
             "kalcal-diag": {
                 "dir": data_dir / "fits" / "kalcal-diag",
                 "filter": {
                     "dir": data_dir / "fits" / "kalcal-diag" / "filter",
-                    "template" : "diag-filter-fits-{mp}mp-sigma_f-{sigma_f}",
+                    "template" : "diag-filter-{itype}-{mp}mp-sigma_f-{sigma_f}.fits",
                     "files": {}
                 },
                 "smoother": {
                     "dir": data_dir / "fits" / "kalcal-diag" / "smoother",
-                    "template" : "diag-smoother-fits-{mp}mp-sigma_f-{sigma_f}",
+                    "template" : "diag-smoother-{itype}-{mp}mp-sigma_f-{sigma_f}.fits",
                     "files": {}
                     }
             },
@@ -350,18 +350,18 @@ def __set_params(options):
                 "dir": data_dir / "fits" / "kalcal-full",
                 "filter": {
                     "dir": data_dir / "fits" / "kalcal-full" / "filter",
-                    "template" : "full-filter-fits-{mp}mp-sigma_f-{sigma_f}",
+                    "template" : "full-filter-{itype}-{mp}mp-sigma_f-{sigma_f}.fits",
                     "files": {}
                     },
                 "smoother": {
                     "dir": data_dir / "fits" / "kalcal-full" / "smoother",
-                    "template" : "full-smoother-fits-{mp}mp-sigma_f-{sigma_f}",
+                    "template" : "full-smoother-{itype}-{mp}mp-sigma_f-{sigma_f}.fits",
                     "files": {}
                     }
             },
             "quartical": {
                 "dir": data_dir / "fits" / "quartical",
-                "template" : "quartical-fits-{mp}mp-t_int-{t_int}",
+                "template" : "quartical-{itype}-{mp}mp-t_int-{t_int}.fits",
                     "files": {}
             }
         },
