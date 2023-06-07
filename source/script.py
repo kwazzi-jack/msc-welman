@@ -1,6 +1,6 @@
 from pathlib import Path
 import os
-from source.parameters import Settings, refreeze, YamlDict
+from source.parameters import Settings, Parameters
 from source.other import check_for_data, DataExistsError
 from source.plotting import plotting_options
 from source.data import measurement_set_options, gains_options, visibility_options
@@ -76,7 +76,10 @@ def script_settings(path="config.yml", no_gui=False):
     app = settings.to_widget()
     if not no_gui:
         clear_output()
-        display(app)
+        tab = widgets.Tab()
+        tab.children = [app]
+        tab.set_title(0, "Script Settings")
+        display(tab)
     try:
         settings.from_yaml(name)
     except:
@@ -85,9 +88,8 @@ def script_settings(path="config.yml", no_gui=False):
     return settings
 
 
-def __setup_logging(options):
-    name = options["name"]
-    log_path = Path(f"{name}.log")
+def setup_logging(options):
+    log_path = Path(f"simulation.log")
     log_path.unlink(missing_ok=True)
     level = options["log-level"]
 
@@ -122,12 +124,15 @@ def __setup_logging(options):
     logger.addHandler(file_handler)
 
 
-def __generate_dir_skeleton(params, cleanup=False):
+def generate_directory_skeleton(params, cleanup=False):
     logging.info("Creating directory paths")
     paths = params["paths"]
 
-    dirs = [
-        paths["main"]["dir"], 
+    dirs = []
+    if str(paths["main"]["dir"]) != ".":
+        dirs += [paths["main"]["dir"]]
+
+    dirs += [
         paths["config"]["dir"], 
         paths["data"]["dir"],
         paths["gains"]["dir"],
@@ -176,7 +181,7 @@ def __generate_dir_skeleton(params, cleanup=False):
         except OSError:
             logging.debug(f"Exists, do nothing: `{path}`")
 
-def __set_thread_count(params):
+def set_thread_count(params):
     n_cpu = "8" if params["n-cpu"] == None else str(params["n-cpu"])
     logging.info(f"Setting thread count to {n_cpu}")
 
@@ -190,7 +195,7 @@ def __set_thread_count(params):
         logging.debug(f"Setting `{env_var}` to {n_cpu}")
 
 
-def __set_random_seed(params):
+def set_random_seed(params):
     import numpy, random
 
     seed = 666 if params["seed"] == None else params["seed"]
@@ -201,7 +206,7 @@ def __set_random_seed(params):
     logging.debug(f"`random` seed set to {seed}")
 
 
-def __set_matplotlib_dir(params):
+def set_matplotlib_dir(params):
     dirname = params["mpl-dir"]
     if len(dirname):
         logging.info(f"Setting matplotlib config directory to {dirname}")
@@ -209,7 +214,7 @@ def __set_matplotlib_dir(params):
     else:
         logging.info(f"Matplotlib config directory unchanged")
 
-def __set_params(options):
+def set_params(options):
     logging.info("Fetching directory paths")
     main_dir = Path(options["name"])
     config_dir = (
@@ -228,17 +233,17 @@ def __set_params(options):
         else Path(options["plots-dir"])
     )
     runs_dir = data_dir / "runs"
-    path_name = config_dir / "params.yml"
+    path_name = config_dir / "params.config"
 
     try:
         check_for_data(path_name)
         logging.info("Replacing parameter data")
     except DataExistsError:
         logging.info("Using saved parameter data")
-        return YamlDict(path_name, freeze=True)
+        return Parameters(path_name)
     
     logging.info("Creating new parameter data")
-    params = YamlDict(path_name, freeze=True, overwrite=True)
+    params = Parameters(path_name, overwrite=True, hault=True)
     logging.debug("Parameter config file created, set to frozen")
     
     logging.info("Setting path information")
@@ -266,7 +271,8 @@ def __set_params(options):
                     "dir": data_dir / "gains" / "kalcal-diag" / "smoother",
                     "template" : "diag-smoother-gains-{mp}mp-sigma_f-{sigma_f}.npz",
                     "files" : {}
-                }
+                },
+                "files": {}
             },
             "kalcal-full": {
                 "dir": data_dir / "gains" / "kalcal-full",
@@ -279,13 +285,15 @@ def __set_params(options):
                     "dir": data_dir / "gains" / "kalcal-full" / "smoother",
                     "template" : "full-smoother-gains-{mp}mp-sigma_f-{sigma_f}.npz",
                     "files" : {}
-                }
+                },
+                "files": {}
             },
             "quartical": {
                 "dir": data_dir / "gains" / "quartical",
                 "template" : "quartical-gains-{mp}mp-t_int-{t_int}.npz",
                 "files" : {}
-            }
+            },
+            "files": {}
         },
         "fluxes": {
             "dir": data_dir / "fluxes",
@@ -305,7 +313,8 @@ def __set_params(options):
                     "dir": data_dir / "fluxes" / "kalcal-diag" / "smoother",
                     "template" : "diag-smoother-fluxes-{mp}mp-sigma_f-{sigma_f}.npz",
                     "files": {}
-                    }
+                    },
+                "files": {}
             },
             "kalcal-full": {
                 "dir": data_dir / "fluxes" / "kalcal-full",
@@ -318,13 +327,15 @@ def __set_params(options):
                     "dir": data_dir / "fluxes" / "kalcal-full" / "smoother",
                     "template" : "full-smoother-fluxes-{mp}mp-sigma_f-{sigma_f}.npz",
                     "files": {}
-                    }
+                    },
+                "files": {}
             },
             "quartical": {
                 "dir": data_dir / "fluxes" / "quartical",
                 "template" : "quartical-fluxes-{mp}mp-t_int-{t_int}.npz",
                     "files": {}
-            }
+            },
+            "files": {}
         },
         "fits": {
             "dir": data_dir / "fits",
@@ -344,7 +355,8 @@ def __set_params(options):
                     "dir": data_dir / "fits" / "kalcal-diag" / "smoother",
                     "template" : "diag-smoother-{itype}-{mp}mp-sigma_f-{sigma_f}.fits",
                     "files": {}
-                    }
+                    },
+                "files": {}
             },
             "kalcal-full": {
                 "dir": data_dir / "fits" / "kalcal-full",
@@ -357,13 +369,15 @@ def __set_params(options):
                     "dir": data_dir / "fits" / "kalcal-full" / "smoother",
                     "template" : "full-smoother-{itype}-{mp}mp-sigma_f-{sigma_f}.fits",
                     "files": {}
-                    }
+                    },
+                "files": {}
             },
             "quartical": {
                 "dir": data_dir / "fits" / "quartical",
                 "template" : "quartical-{itype}-{mp}mp-t_int-{t_int}.fits",
                     "files": {}
-            }
+            },
+            "files": {}
         },
         "runs": {
             "dir": runs_dir, 
@@ -377,27 +391,25 @@ def __set_params(options):
     params["mpl-dir"] = options["mpl-dir"]
     params["seed"] = options["seed"]
     params["n-cpu"] = options["n-cpu"]
-
-    refreeze(params)
+    
     logging.info("Completed and returning parameters")
     return params
 
 def setup_simulation(options, cleanup=False):
-    __setup_logging(options)
-    params = __set_params(options)
-    __generate_dir_skeleton(params, cleanup)
-    __set_thread_count(params)
-    __set_random_seed(params)
-    __set_matplotlib_dir(params)
+    setup_logging(options)
+    params = set_params(options)
+    generate_directory_skeleton(params, cleanup)
+    params.save()
+    set_thread_count(params)
+    set_random_seed(params)
+    set_matplotlib_dir(params)
     logging.info("Simulation setup complete")
     return params
 
-def main_settings(name="config.yml", cleanup=False):
-    titles = ['Script', 'Plotting', 'Measurement Set', 
+def all_settings(params):
+    titles = ['Plotting', 'Measurement Set', 
               'Gains', 'Visibilities', "kalcal-diag",
               "kalcal-full", "QuartiCal"]
-    script_options = script_settings(name, no_gui=True)
-    params = setup_simulation(script_options, cleanup)
 
     pl_options = plotting_options(params, no_gui=True)
     ms_options = measurement_set_options(params, no_gui=True)
@@ -408,7 +420,6 @@ def main_settings(name="config.yml", cleanup=False):
     qut_options = quartical_options(params, no_gui=True)
 
     children = [
-        script_options.to_widget(),
         pl_options.to_widget(),
         ms_options.to_widget(),
         gs_options.to_widget(),
@@ -424,7 +435,6 @@ def main_settings(name="config.yml", cleanup=False):
         tab.set_title(i, titles[i])
 
     options = {
-        "script" : script_options,
         "plots" : pl_options,
         "gains" : gs_options,
         "ms" : ms_options,

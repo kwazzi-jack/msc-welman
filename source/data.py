@@ -1,4 +1,4 @@
-from source.parameters import Settings, YamlDict, refreeze
+from source.parameters import Settings
 from pathlib import Path
 from ipywidgets import Output
 from IPython.display import display, clear_output
@@ -7,13 +7,13 @@ from source.other import check_for_data, DataExistsError
 from africanus.gps.kernels import exponential_squared as expsq
 from africanus.linalg import kronecker_tools as kt
 from africanus.coordinates import radec_to_lm
-from casacore.tables import table, makearrcoldesc, maketabdesc
+from casacore.tables import table
 import numpy as np
 import logging
 import random
 from ducc0.wgridder import dirty2ms
 from africanus.constants import c as light_speed
-from africanus.calibration.utils import corrupt_vis, correct_vis
+from africanus.calibration.utils import corrupt_vis
 from ducc0.fft import good_size
 import os
 
@@ -24,8 +24,8 @@ def measurement_set_options(params, no_gui=False):
     paths = params["paths"]
     name = "ms-options.yml"
     options_dir = paths["options"]["dir"]
-    with refreeze(params):
-        paths["options"]["ms"] = options_dir / name
+    paths["options"]["ms"] = options_dir / name
+    params.save()
     logging.debug(f"Measurement set config at: `{options_dir / name}`")
 
     settings = Settings(
@@ -180,27 +180,17 @@ def create_empty_measurement_set(ms_options, params, verbose=False):
         with out:
             Popen(simms_args).wait()
 
-        logging.info("Updating path and parameter data")
-        with refreeze(params):
-            params["telescope"] = telescope
-            params["ra"] = ra
-            params["dec"] = dec
-            params["st"] = st
-            params["dt"] = dt
-            params["freq_0"] = freq_0
-            paths["data"]["ms"] = ms_path
-
         logging.info(f"New measurement set created at `{ms_path}`")
     except:
         logging.info(f"Keep original measurement set at `{ms_path}`")
-        logging.info("Updating path and parameter data")
-        with refreeze(params):
-            params["ra"] = ra
-            params["dec"] = dec
-            params["st"] = st
-            params["dt"] = dt
-            params["freq_0"] = freq_0
-            paths["data"]["ms"] = ms_path
+    
+    logging.info("Updating path and parameter data")
+    params["ra"] = ra
+    params["dec"] = dec
+    params["st"] = st
+    params["dt"] = dt
+    params["freq_0"] = freq_0
+    paths["data"]["ms"] = ms_path
 
 
 def gains_options(params, no_gui=False):
@@ -210,8 +200,8 @@ def gains_options(params, no_gui=False):
     paths = params["paths"]
     name = "gains-config.yml"
     options_dir = paths["options"]["dir"]
-    with refreeze(params):
-        paths["options"]["gains"] = options_dir / name
+    paths["options"]["gains"] = options_dir / name
+    params.save()
     logging.debug(f"Measurement set config at: `{options_dir / name}`")
     
     settings = Settings(
@@ -359,6 +349,7 @@ def create_gains_signal(gs_options, params):
         logging.debug("True gains path exists, do nothing")
     else:
         true_path = paths["gains"]["true"]["dir"] / paths["gains"]["true"]["template"]
+        paths["gains"]["true"]["files"] = true_path
         logging.debug(f"True gains path does not exist, create new one: {true_path}")
 
     logging.debug("Check if directories exist")
@@ -369,14 +360,14 @@ def create_gains_signal(gs_options, params):
     if not path.exists():
         os.mkdir(path)
 
+    params.save()
+
     try:
         check_for_data(true_path)
         logging.info("Creating new true gains")
     except DataExistsError:
         logging.info("Using existing gains")
         logging.info("Updating path and parameter data")
-        with refreeze(params):
-            paths["gains"]["true"]["files"] = true_path
         return
     
     logging.info(f"Retrieving information from `{paths['data']['ms']}`")
@@ -408,12 +399,12 @@ def create_gains_signal(gs_options, params):
     shape = (n_time, n_ant, n_chan, n_dir, n_corr)
 
     logging.debug("Updating dimension information")
-    with refreeze(params):
-        params["n-ant"] = n_ant
-        params["n-time"] = n_time
-        params["n-chan"] = n_chan
-        params["n-dir"] = n_dir
-        params["n-corr"] = n_corr
+    params["n-ant"] = n_ant
+    params["n-time"] = n_time
+    params["n-chan"] = n_chan
+    params["n-dir"] = n_dir
+    params["n-corr"] = n_corr
+    params.save()
 
     # Create lm-array
     lm = np.array(radec_to_lm(PHASE_DIR.reshape(1, -1)))
@@ -483,9 +474,6 @@ def create_gains_signal(gs_options, params):
             )
 
     logging.info(f"New simulated gains at `{true_path}`")
-    logging.info("Updating path and parameter data")
-    with refreeze(params):
-            paths["gains"]["true"]["files"] = true_path
 
 def load_data(path):
     logging.debug("Invoking function")
@@ -519,8 +507,8 @@ def visibility_options(params, no_gui=False):
 
     name = "visibility-config.yml"
     options_dir = paths["options"]["dir"]
-    with refreeze(params):
-        paths["options"]["vis"] = options_dir / name    
+    paths["options"]["vis"] = options_dir / name   
+    params.save() 
     logging.debug(f"Visibility options config at: `{options_dir / name}`")
     
     settings = Settings(
@@ -679,9 +667,8 @@ def create_skymodels(vis_options, params,
         logging.debug("True fluxes paths do not exist, create new ones")
         template = paths["fluxes"]["true"]["template"]
         base_dir = paths["fluxes"]["true"]["dir"]
-        with refreeze(params):
-            for percent in percents:
-                true_paths[percent] = base_dir / template.format(mp=percent)
+        for percent in percents:
+            true_paths[percent] = base_dir / template.format(mp=percent)
 
     logging.debug("Check if directories exist")
     path = paths["fluxes"]["dir"]
@@ -690,13 +677,6 @@ def create_skymodels(vis_options, params,
     path = paths["fluxes"]["true"]["dir"]
     if not path.exists():
         os.mkdir(path)
-
-    try:
-        check_for_data(*true_paths.values())
-        logging.info("Creating new true fluxes")
-    except DataExistsError:
-        logging.info("Using existing true fluxes")
-        return
 
     # Model Parameters
     logging.info("Fetching skymodel information")
@@ -710,18 +690,24 @@ def create_skymodels(vis_options, params,
     dist = vis_options["dist"]
     layout = vis_options["layout"]
 
-    logging.info("Updating parameter information")
-    with refreeze(params):
-        params["percents"] = percents
-        params["peak-flux"] = peak_flux
-        params["n-src"] = n_src
-        params["alpha"] = alpha
-        params["fov"] = fov
-        params["min-flux"] = min_flux
-        params["buffer"] = buffer
-        params["sampling"] = sampling
-        params["dist"] = dist
-        params["layout"] = layout
+    params["percents"] = percents
+    params["peak-flux"] = peak_flux
+    params["n-src"] = n_src
+    params["alpha"] = alpha
+    params["fov"] = fov
+    params["min-flux"] = min_flux
+    params["buffer"] = buffer
+    params["sampling"] = sampling
+    params["dist"] = dist
+    params["layout"] = layout
+    params.save()
+
+    try:
+        check_for_data(*true_paths.values())
+        logging.info("Creating new true fluxes")
+    except DataExistsError:
+        logging.info("Using existing true fluxes")
+        return
 
     logging.debug("Calculating cell-size and n-pix")
     with table(str(paths["data"]["ms"]), ack=False) as tb:
@@ -790,6 +776,9 @@ def create_skymodels(vis_options, params,
         if np.where(distances < buffer, 1.0, 0.0).any():
             logging.error(f"Sources within buffer reach of {buffer}")
             raise ValueError("Some sources are within buffer reach")
+    elif layout.lower() == "custom":
+        logging.debug("Layout set to custom")
+        Ix, Iy = position_function(n_pix, n_src)
     else:
         logging.error("Other layouts not yet completed.")
         raise NotImplementedError("Other layouts not yet implemented.")
@@ -814,6 +803,13 @@ def create_skymodels(vis_options, params,
                 cell_asec=cell_asec
             )
     
+    logging.info("Updating parameter information")
+    params["cell-rad"] = cell_rad
+    params["cell-deg"] = cell_deg
+    params["cell-asec"] = cell_asec
+    params["n-pix"] = n_pix
+    params.save()
+
 
 def create_visibilities(vis_options, params):
     logging.debug("Invoking function")
@@ -830,6 +826,10 @@ def create_visibilities(vis_options, params):
     sigma_n = vis_options["sigma-n"]
     tol = vis_options["tol"]
     
+    params["sigma_n"] = sigma_n
+    params["tol"] = tol
+    params.save()
+
     logging.debug("Fetching table information")
     with table(str(paths["data"]["ms"]), ack=False) as tb:
         TIME = tb.getcol("TIME")
@@ -846,16 +846,11 @@ def create_visibilities(vis_options, params):
     gains = load_data(true_path)
     true_gains = gains["gains"][:, :, None, None, None]
     changeAll = False
+    percents = params["percents"]
 
-    percents = params.get("percents", False)
-    new_percents = list(map(int, vis_options["percents"].replace(" ", "").split(",")))
-    if not percents or set(percents) != set(new_percents):
-        with refreeze(params):
-            params["percents"] = new_percents
-
-    with refreeze(params):
-        params["sigma-n"] = sigma_n
-        params["tol"] = tol
+    params["sigma-n"] = sigma_n
+    params["tol"] = tol
+    params.save()
 
     true_paths = paths["fluxes"]["true"]["files"]
 
@@ -893,9 +888,13 @@ def create_visibilities(vis_options, params):
         vis = clean_vis + noise
         
         logging.info(f"Saving {percent}MP visibilities to `{paths['data']['ms']}`")
+        logging.info(f"Measured Visibilities: 'DATA_{percent}MP'")
+        logging.info(f"Clean Measured Visibilities: 'CLEAN_{percent}MP")
+        logging.info(f"True/Model Visibilities: 'MODEL_{percent}MP")
+        logging.info(f"Noise Term: 'NOISE_{percent}MP")
+
         with table(str(paths["data"]["ms"]), readonly=False, ack=False) as tb:
-            
-            for column in ["noise", "model", "clean", "data"]:
+            for column in ["model", "clean", "data", "noise"]:
                 desc = tb.getcoldesc("DATA")
                 desc["name"] = f"{column.upper()}_{percent}MP"
                 desc['comment'] = desc['comment'].replace(" ", "_") 
@@ -922,7 +921,7 @@ def create_visibilities(vis_options, params):
                     else:
                         logging.info("Stopping visibility generation")
                         return
-            
+
             # Add to columns
             logging.debug("Place data in table")
             tb.putcol(f"NOISE_{percent}MP", noise)

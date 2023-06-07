@@ -1,6 +1,7 @@
 from numba import njit
 from casacore.tables import table
-from source.parameters import refreeze, Settings, YamlDict
+from source.parameters import Settings
+import yaml
 from pathlib import Path
 from IPython.display import clear_output, display
 from source.data import load_data
@@ -420,8 +421,8 @@ def kalcal_diag_options(params, no_gui=False):
     logging.debug("Creating kalcal-diag options config")
     name = "kalcal-diag-config.yml"
     options_dir = paths["options"]["dir"]
-    with refreeze(params):
-        paths["options"]["kalcal-diag"] = options_dir / name
+    paths["options"]["kalcal-diag"] = options_dir / name
+    params.save()
     logging.debug(f"kalcal-diag options config at: `{options_dir / name}`")
 
     settings = Settings(
@@ -506,17 +507,17 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
     lb = kal_diag_options["low-bound"]
     ub = kal_diag_options["up-bound"]
 
+    params["kalcal-diag"] = {
+            "status" : status,
+            "n-points" : n_points,
+            "prec" : prec,
+            "low-bound": lb,
+            "up-bound": ub
+    }
+    params.save()
+
     if status == "DISABLED":
-        logging.info("kalcal-diag is disabled, do nothing")
-        logging.info("Updating parameter information")
-        with refreeze(params):
-            params["kalcal-diag"] = {
-                "status" : status,
-                "n-points" : n_points,
-                "prec" : prec,
-                "low-bound": lb,
-                "up-bound": ub
-            }
+        logging.info("kalcal-diag is disabled, do nothing")        
         return
     
     sigma_fs = np.round(np.logspace(lb, ub, n_points), prec)
@@ -537,7 +538,7 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
                                                             mp=percent, sigma_f=sigma_f)
             smoother_paths[percent][sigma_f] = smoother_dir / smoother_template.format(
                                                             mp=percent, sigma_f=sigma_f)
-    refreeze(params)
+    
     solution_paths = [filter_paths[percent][sigma_f] for sigma_f in sigma_fs for percent in percents]
     solution_paths += [smoother_paths[percent][sigma_f] for sigma_f in sigma_fs for percent in percents]
 
@@ -552,20 +553,12 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
     if not smoother_dir.exists():
         os.mkdir(smoother_dir)
 
+    params.save()
     try:
         check_for_data(*solution_paths)
         logging.debug("Creating new solutions")
     except DataExistsError:
         logging.info("No deletion done")
-        logging.info("Updating parameter information")
-        with refreeze(params):
-            params["kalcal-diag"] = {
-                "status" : status,
-                "n-points" : n_points,
-                "prec" : prec,
-                "low-bound": lb,
-                "up-bound": ub
-            }
         return
     
     total_runs = n_points * len(percents)
@@ -612,15 +605,6 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
                 pbar.refresh()
 
     logging.info("Calibration complete")
-    logging.info("Updating parameter information")
-    with refreeze(params):
-            params["kalcal-diag"] = {
-                "status" : status,
-                "n-points" : n_points,
-                "prec" : prec,
-                "low-bound": lb,
-                "up-bound": ub
-            }
 
 @njit(fastmath=True, nogil=True)
 def cholesky_inv(X):
@@ -949,8 +933,8 @@ def kalcal_full_options(params, no_gui=False):
     logging.debug("Creating kalcal-full options config")
     name = "kalcal-full-config.yml"
     options_dir = paths["options"]["dir"]
-    with refreeze(params):
-        paths["options"]["kalcal-full"] = options_dir / name
+    paths["options"]["kalcal-full"] = options_dir / name
+    params.save()
     logging.debug(f"kalcal-full options config at: `{options_dir / name}`")
 
     settings = Settings(
@@ -1034,17 +1018,17 @@ def run_kalcal_full_calibration(kal_full_options, params,
     lb = kal_full_options["low-bound"]
     ub = kal_full_options["up-bound"]
 
+    params["kalcal-diag"] = {
+            "status" : status,
+            "n-points" : n_points,
+            "prec" : prec,
+            "low-bound": lb,
+            "up-bound": ub
+        }
+    params.save()
+    
     if status == "DISABLED":
         logging.info("kalcal-full is disabled, do nothing")
-        logging.info("Updating parameter information")
-        with refreeze(params) as file:
-            file["kalcal-diag"] = {
-                "status" : status,
-                "n-points" : n_points,
-                "prec" : prec,
-                "low-bound": lb,
-                "up-bound": ub
-            }
         return
     
     sigma_fs = np.round(np.logspace(lb, ub, n_points), prec)
@@ -1197,8 +1181,8 @@ def quartical_options(params, no_gui=False):
     logging.debug("Creating QuartiCal options config")
     name = "quartical-config.yml"
     options_dir = paths["options"]["dir"]
-    with refreeze(params):
-        paths["options"]["quartical"] = options_dir / name
+    paths["options"]["quartical"] = options_dir / name
+    params.save()
     logging.debug(f"QuartiCal options config at: `{options_dir / name}`")
 
     settings = Settings(
@@ -1284,10 +1268,9 @@ def quartical_setup(quart_options, params):
     paths = params["paths"]
     config_dir = paths["config"]["dir"]
     config_path = config_dir / "quartical.yml"
-    
-    with refreeze(params):
-        paths["config"]["quartical"] = config_path
-    
+    paths["config"]["quartical"] = config_path
+    params.save()
+
     try:
         check_for_data(config_path)
     except:
@@ -1301,26 +1284,22 @@ def quartical_setup(quart_options, params):
     iters = quart_options["iters"]
     conv_crit = quart_options["conv-crit"]
 
-    with refreeze(params):
-        if params.get("quartical", True):
-            params["quartical"] = {}
-            
-        params["quartical"]["status"] = status
-        params["quartical"]["n-points"] = len(t_ints)
-        params["quartical"]["t-ints"] = t_ints
-        params["quartical"]["iters"] = iters
-        params["quartical"]["conv-crit"] = conv_crit
+    if params.get("quartical", True):
+        params["quartical"] = {}
+        
+    params["quartical"]["status"] = status
+    params["quartical"]["n-points"] = len(t_ints)
+    params["quartical"]["t-ints"] = t_ints
+    params["quartical"]["iters"] = iters
+    params["quartical"]["conv-crit"] = conv_crit
+    params.save()
 
-    try:
-        n_time = params["n-time"]
-    except:
-        n_time, n_ant = load_data(paths["gains"]["true"]["files"])["gains"].shape
-        with refreeze(params):            
-            params["n-time"] = n_time
-            params["n-ant"] = n_ant
+    n_time, n_ant = load_data(paths["gains"]["true"]["files"])["gains"].shape   
+    params["n-time"] = n_time
+    params["n-ant"] = n_ant
 
     logging.info("Creating QuartiCal config")    
-    config = YamlDict(config_path, overwrite=True)
+    config = {}
 
     logging.debug("Generate `input_ms` options")
     config["input_ms"] = {
@@ -1372,11 +1351,12 @@ def quartical_setup(quart_options, params):
         "freq_interval": 1
     }
 
-    config.freeze()
-
+    with open(config_path, "w") as file:
+        yaml.dump(config, file, default_flow_style=False)
+        
     logging.info("Updating parameter data")
-    with refreeze(params) as file:
-        file["quartical"]["config"] = config
+    params["quartical"]["config"] = config
+    params.save()
 
 
 def convert_quartical_to_codex(gains_path, runs_path, t_int, shape):
@@ -1426,13 +1406,13 @@ def run_quartical_calibration(quart_options, params,
     t_ints = quart_params["t-ints"]
     n_points = len(t_ints)
 
+    params["quartical"]["status"] = status
+    params["quartical"]["n-points"] = n_points
+    params["quartical"]["t-ints"] = t_ints
+    params.save()
+
     if status == "DISABLED":
         logging.info("QuartiCal is disabled, do nothing")
-        logging.info("Updating parameter information")
-        with refreeze(params):
-            params["quartical"]["status"] = status
-            params["quartical"]["n-points"] = n_points
-            params["quartical"]["t-ints"] = t_ints
         return
     
     logging.info("Calculated line search process noise parameters")
@@ -1456,7 +1436,7 @@ def run_quartical_calibration(quart_options, params,
             runs_paths[percent][t_int] = runs_dir / runs_template.format(
                                                             mp=percent, t_int=t_int)
         
-    refreeze(params)
+    
     solution_paths = [quartical_paths[percent][t_int] for t_int in t_ints for percent in percents]
 
     path = paths["gains"]["dir"]
@@ -1465,16 +1445,13 @@ def run_quartical_calibration(quart_options, params,
     if not quartical_dir.exists():
         os.mkdir(quartical_dir)
 
+    params.save()
+
     try:
         check_for_data(*solution_paths)
         logging.debug("Creating new solutions")
     except DataExistsError:
         logging.info("No deletion done")
-        logging.info("Updating parameter information")
-        with refreeze(params):
-            params["quartical"]["status"] = status
-            params["quartical"]["n-points"] = n_points
-            params["quartical"]["t-ints"] = t_ints
             
         return    
 
@@ -1526,8 +1503,3 @@ def run_quartical_calibration(quart_options, params,
                 pbar.refresh()
     
     logging.info("QuartiCal calibration complete")
-    logging.info("Updating parameter information")
-    with refreeze(params):
-        params["quartical"]["status"] = status
-        params["quartical"]["n-points"] = n_points
-        params["quartical"]["t-ints"] = t_ints

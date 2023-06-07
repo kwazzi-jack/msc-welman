@@ -6,11 +6,11 @@ from casacore.tables import table, maketabdesc, makearrcoldesc
 from pfb.utils.fits import set_wcs, save_fits
 from source.data import load_data
 from source.metrics import mean_square_error, root_mean_square_error
-from source.parameters import refreeze
 from source.other import progress_bar, check_for_data, DataExistsError
 import os
 import subprocess
 import time
+from pathlib import Path
 
 def calculate_image_noise_rms(params):
     logging.debug("Invoking function")
@@ -133,9 +133,10 @@ def pcg(A, b, x0, M=None, tol=1e-5, maxit=500,
     return x
 
 
-def calculate_recovered_flux(params, gains_file, vis_column, 
-                                model_file, fluxes_file, 
-                                residual_file, dirty_file):
+def calculate_recovered_flux(params, gains_file, vis_column,
+                                model_column, model_file, 
+                                fluxes_file, residual_file, 
+                                dirty_file, corrected_file):
     logging.debug("Invoking function")
     logging.debug("Fetching parameters")
     paths = params["paths"]
@@ -146,6 +147,7 @@ def calculate_recovered_flux(params, gains_file, vis_column,
         ANT1 = tb.getcol("ANTENNA1")
         ANT2 = tb.getcol("ANTENNA2")
         vis = tb.getcol(vis_column)[..., 0].astype(np.complex128)
+        model_vis = tb.getcol(model_column)[..., 0].astype(np.complex128)
 
     with table(f"{ms_path}::FIELD", ack=False) as tb:
         RADEC = tb.getcol('PHASE_DIR')[0][0]     
@@ -167,7 +169,10 @@ def calculate_recovered_flux(params, gains_file, vis_column,
     mask = np.where(model, 1.0, 0)
     
     # Retrieve gains, but account for kalcal extra axis
-    gains = np.load(gains_file)["gains"][..., None, None, None]
+    gains = np.load(gains_file)["gains"]
+
+    if gains.ndim == 2:
+        gains = gains[..., None, None, None]
 
     # Time bin indices and counts
     _, tbin_indices, tbin_counts = np.unique(TIME, return_index=True,
@@ -221,20 +226,425 @@ def calculate_recovered_flux(params, gains_file, vis_column,
                     pixsize_x=cell_rad, pixsize_y=cell_rad,
                     epsilon=tol, nthreads=n_cpu, do_wstacking=True)
     
+    corrected_image = ms2dirty(uvw=UVW, freq=FREQ, ms=S * G.conj() * (vis - G * model_vis),
+                    npix_x=nx, npix_y=ny,
+                    pixsize_x=cell_rad, pixsize_y=cell_rad,
+                    epsilon=tol, nthreads=n_cpu, do_wstacking=True)
+    
     logging.debug("Recovered flux found, saved to file")
     residual_image /= W.sum()
+    dirty_image /= W.sum()
+    corrected_image /= W.sum()
+
     # Save flux per source to file
     with open(fluxes_file, "wb") as file:
         np.savez(file, 
                  flux=recovered_flux,
-                 residual=residual_image
+                 residual=residual_image,
+                 corrected=corrected_image
                 )
+        
     image_to_fits(residual_image, cell_rad, residual_file, FREQ[0], RADEC)
-
-    dirty_image /= W.sum()
+    image_to_fits(corrected_image, cell_rad, corrected_file, FREQ[0], RADEC)
     image_to_fits(dirty_image, cell_rad, dirty_file, FREQ[0], RADEC)
     logging.debug("Fits files saved")
 
+def run_kalcal_full_flux_extractor(params, progress=False, check_metric=False, overwrite=False):
+    if progress:
+        pbar = progress_bar("Images")
+
+    logging.debug("Invoking function")
+    paths = params["paths"]
+
+    if params["seed"]:
+        logging.info(f"Setting seed to {params['seed']}")
+        np.random.seed(params["seed"])
+    else:
+        logging.info(f"No seed set")
+
+    percents = params["percents"]
+
+    kalcal_params = params["kalcal-full"]
+    status = kalcal_params["status"]
+    sigma_fs = kalcal_params["sigma-fs"]
+    n_points = kalcal_params["n-points"]
+
+    if status == "DISABLED":
+        logging.info("kalcal-full is disabled, do nothing")
+        return
+    
+    logging.info("Retrieved line search sigma-fs parameters")
+    logging.info("Updating path data")
+    filter_fluxes_paths = paths["fluxes"]["kalcal-full"]["filter"]["files"]
+    filter_fluxes_dir = paths["fluxes"]["kalcal-full"]["filter"]["dir"]
+    filter_fluxes_template = paths["fluxes"]["kalcal-full"]["filter"]["template"]
+
+    smoother_fluxes_paths = paths["fluxes"]["kalcal-full"]["smoother"]["files"]
+    smoother_fluxes_dir = paths["fluxes"]["kalcal-full"]["smoother"]["dir"]
+    smoother_fluxes_template = paths["fluxes"]["kalcal-full"]["smoother"]["template"]
+
+    filter_fits_paths = paths["fits"]["kalcal-full"]["filter"]["files"]
+    filter_fits_dir = paths["fits"]["kalcal-full"]["filter"]["dir"]
+    filter_fits_template = paths["fits"]["kalcal-full"]["filter"]["template"]
+
+    smoother_fits_paths = paths["fits"]["kalcal-full"]["filter"]["files"]
+    smoother_fits_dir = paths["fits"]["kalcal-full"]["filter"]["dir"]
+    smoother_fits_template = paths["fits"]["kalcal-full"]["filter"]["template"]
+
+    for percent in percents:
+        filter_fluxes_paths[percent] = {}
+        smoother_fluxes_paths[percent] = {}
+        filter_fits_paths[percent] = {}
+        smoother_fits_paths[percent] = {}
+        for sigma_f in sigma_fs:
+            filter_fluxes_paths[percent][sigma_f] = filter_fluxes_dir / filter_fluxes_template.format(
+                                           mp=percent, sigma_f=sigma_f)
+            smoother_fluxes_paths[percent][sigma_f] = smoother_fluxes_dir / smoother_fluxes_template.format(
+                                           mp=percent, sigma_f=sigma_f)            
+            filter_fits_paths[percent][sigma_f] = {
+                "residual": filter_fits_dir / \
+                    filter_fits_template.format(mp=percent, sigma_f=sigma_f, itype="residual"),
+                "dirty": filter_fits_dir / \
+                    filter_fits_template.format(mp=percent, sigma_f=sigma_f, itype="dirty"),
+                "corrected": filter_fits_dir / \
+                    filter_fits_template.format(mp=percent, sigma_f=sigma_f, itype="corrected")
+            }
+            smoother_fits_paths[percent][sigma_f] = {
+                "residual": smoother_fits_dir / \
+                    smoother_fits_template.format(mp=percent, sigma_f=sigma_f, itype="residual"),
+                "dirty": smoother_fits_dir / \
+                    smoother_fits_template.format(mp=percent, sigma_f=sigma_f, itype="dirty"),
+                "corrected": smoother_fits_dir / \
+                    smoother_fits_template.format(mp=percent, sigma_f=sigma_f, itype="corrected")
+            }
+
+    solution_paths = [filter_fluxes_paths[percent][sigma_f] for sigma_f in sigma_fs for percent in percents] \
+        + [filter_fits_paths[percent][sigma_f]["residual"] for sigma_f in sigma_fs for percent in percents] \
+        + [filter_fits_paths[percent][sigma_f]["dirty"] for sigma_f in sigma_fs for percent in percents] \
+        + [filter_fits_paths[percent][sigma_f]["corrected"] for sigma_f in sigma_fs for percent in percents] \
+        + [smoother_fluxes_paths[percent][sigma_f] for sigma_f in sigma_fs for percent in percents] \
+        + [smoother_fits_paths[percent][sigma_f]["residual"] for sigma_f in sigma_fs for percent in percents] \
+        + [smoother_fits_paths[percent][sigma_f]["dirty"] for sigma_f in sigma_fs for percent in percents] \
+        + [smoother_fits_paths[percent][sigma_f]["corrected"] for sigma_f in sigma_fs for percent in percents]
+
+    path = paths["fluxes"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    path = paths["fluxes"]["kalcal-full"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    if not filter_fluxes_dir.exists():
+        os.mkdir(filter_fluxes_dir)
+    if not smoother_fluxes_dir.exists():
+        os.mkdir(smoother_fluxes_dir)
+
+    path = paths["fits"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    path = paths["fits"]["kalcal-full"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    if not filter_fits_dir.exists():
+        os.mkdir(filter_fits_dir)
+    if not smoother_fits_dir.exists():
+        os.mkdir(smoother_fits_dir)
+
+    params.save()
+    
+    if not overwrite:
+        try:
+            check_for_data(*solution_paths)
+            logging.debug("Creating new solutions and images")
+        except DataExistsError:
+            logging.info("No deletion done")            
+            return    
+    else:
+        logging.info("Overwriting previous solutions and images")
+
+    total_runs = n_points * len(percents)
+    model_path = paths["fluxes"]["true"]["files"][100]
+    skymodel = load_data(model_path)
+    model = skymodel["model"]
+    Ix = skymodel["Ix"]
+    Iy = skymodel["Iy"]
+    true_flux = model[Ix, Iy]
+    filter_gains_paths = paths["gains"]["kalcal-full"]["filter"]["files"]
+    smoother_gains_paths = paths["gains"]["kalcal-full"]["smoother"]["files"]
+
+    if progress:
+        pbar.total = 2 * total_runs
+
+    logging.info(f"Running line-search on {n_points} points " \
+                + f"({total_runs} runs)")
+    
+    for percent in percents:
+        for sigma_f in sigma_fs:
+            gains_path = filter_gains_paths[percent][sigma_f]
+            flux_path = filter_fluxes_paths[percent][sigma_f]
+            residual_path = filter_fits_paths[percent][sigma_f]["residual"]
+            dirty_path = filter_fits_paths[percent][sigma_f]["dirty"]
+            corrected_path = filter_fits_paths[percent][sigma_f]["corrected"]
+            vis_column = f"DATA_100MP"
+            model_column = f"MODEL_{percent}MP"
+            
+            start = time.time()
+            calculate_recovered_flux(params, gains_path, vis_column, 
+                                model_column, model_path, flux_path, 
+                                residual_path, dirty_path, corrected_path)
+            end = time.time()
+            log_msg = f"kalcal-full-filter on {percent}MP with "\
+                    + f"`sigma-f={sigma_f:.3g}`, {(end - start):.3g}s taken"
+                         
+            if check_metric:
+                results = load_data(flux_path)
+                recovered_flux = results["flux"]
+                residual = results["residual"]
+                corrected = results["corrected"]
+                mse = mean_square_error(true_flux, recovered_flux)
+                res_rms = np.sqrt(np.square(residual).mean())
+                cor_rms = np.sqrt(np.square(corrected).mean())
+                log_msg += f", with Flux MSE={mse:.3g}, "
+                log_msg += f"Residual RMS={res_rms:.3g}, and "
+                log_msg += f"Corrected RMS={cor_rms:.3g}."
+            
+            logging.info(log_msg)
+            if progress:
+                pbar.update(1)
+                pbar.refresh()
+            
+            gains_path = smoother_gains_paths[percent][sigma_f]
+            flux_path = smoother_fluxes_paths[percent][sigma_f]
+            residual_path = smoother_fits_paths[percent][sigma_f]["residual"]
+            dirty_path = smoother_fits_paths[percent][sigma_f]["dirty"]
+            corrected_path = smoother_fits_paths[percent][sigma_f]["corrected"]
+            vis_column = f"DATA_100MP"
+            model_column = f"MODEL_{percent}MP"
+            
+            start = time.time()
+            calculate_recovered_flux(params, gains_path, vis_column, 
+                                model_column, model_path, flux_path, 
+                                residual_path, dirty_path, corrected_path)
+            end = time.time()
+            log_msg = f"kalcal-full-smoother on {percent}MP with "\
+                    + f"`sigma-f={sigma_f:.3g}`, {(end - start):.3g}s taken"
+                         
+            if check_metric:
+                results = load_data(flux_path)
+                recovered_flux = results["flux"]
+                residual = results["residual"]
+                corrected = results["corrected"]
+                mse = mean_square_error(true_flux, recovered_flux)
+                res_rms = np.sqrt(np.square(residual).mean())
+                cor_rms = np.sqrt(np.square(corrected).mean())
+                log_msg += f", with Flux MSE={mse:.3g}, "
+                log_msg += f"Residual RMS={res_rms:.3g}, and "
+                log_msg += f"Corrected RMS={cor_rms:.3g}."
+            
+            logging.info(log_msg)
+            if progress:
+                pbar.update(1)
+                pbar.refresh()
+
+    logging.info("Flux extractor complete")
+
+
+def run_kalcal_diag_flux_extractor(params, progress=False, check_metric=False, overwrite=False):
+    if progress:
+        pbar = progress_bar("Images")
+
+    logging.debug("Invoking function")
+    paths = params["paths"]
+
+    if params["seed"]:
+        logging.info(f"Setting seed to {params['seed']}")
+        np.random.seed(params["seed"])
+    else:
+        logging.info(f"No seed set")
+
+    percents = params["percents"]
+
+    kalcal_params = params["kalcal-diag"]
+    status = kalcal_params["status"]
+    sigma_fs = kalcal_params["sigma-fs"]
+    n_points = kalcal_params["n-points"]
+
+    if status == "DISABLED":
+        logging.info("kalcal-diag is disabled, do nothing")
+        return
+    
+    logging.info("Retrieved line search sigma-fs parameters")
+    logging.info("Updating path data")
+    filter_fluxes_paths = paths["fluxes"]["kalcal-diag"]["filter"]["files"]
+    filter_fluxes_dir = paths["fluxes"]["kalcal-diag"]["filter"]["dir"]
+    filter_fluxes_template = paths["fluxes"]["kalcal-diag"]["filter"]["template"]
+
+    smoother_fluxes_paths = paths["fluxes"]["kalcal-diag"]["smoother"]["files"]
+    smoother_fluxes_dir = paths["fluxes"]["kalcal-diag"]["smoother"]["dir"]
+    smoother_fluxes_template = paths["fluxes"]["kalcal-diag"]["smoother"]["template"]
+
+    filter_fits_paths = paths["fits"]["kalcal-diag"]["filter"]["files"]
+    filter_fits_dir = paths["fits"]["kalcal-diag"]["filter"]["dir"]
+    filter_fits_template = paths["fits"]["kalcal-diag"]["filter"]["template"]
+
+    smoother_fits_paths = paths["fits"]["kalcal-diag"]["filter"]["files"]
+    smoother_fits_dir = paths["fits"]["kalcal-diag"]["filter"]["dir"]
+    smoother_fits_template = paths["fits"]["kalcal-diag"]["filter"]["template"]
+
+    for percent in percents:
+        filter_fluxes_paths[percent] = {}
+        smoother_fluxes_paths[percent] = {}
+        filter_fits_paths[percent] = {}
+        smoother_fits_paths[percent] = {}
+        for sigma_f in sigma_fs:
+            filter_fluxes_paths[percent][sigma_f] = filter_fluxes_dir / filter_fluxes_template.format(
+                                           mp=percent, sigma_f=sigma_f)
+            smoother_fluxes_paths[percent][sigma_f] = smoother_fluxes_dir / smoother_fluxes_template.format(
+                                           mp=percent, sigma_f=sigma_f)            
+            filter_fits_paths[percent][sigma_f] = {
+                "residual": filter_fits_dir / \
+                    filter_fits_template.format(mp=percent, sigma_f=sigma_f, itype="residual"),
+                "dirty": filter_fits_dir / \
+                    filter_fits_template.format(mp=percent, sigma_f=sigma_f, itype="dirty"),
+                "corrected": filter_fits_dir / \
+                    filter_fits_template.format(mp=percent, sigma_f=sigma_f, itype="corrected")
+            }
+            smoother_fits_paths[percent][sigma_f] = {
+                "residual": smoother_fits_dir / \
+                    smoother_fits_template.format(mp=percent, sigma_f=sigma_f, itype="residual"),
+                "dirty": smoother_fits_dir / \
+                    smoother_fits_template.format(mp=percent, sigma_f=sigma_f, itype="dirty"),
+                "corrected": smoother_fits_dir / \
+                    smoother_fits_template.format(mp=percent, sigma_f=sigma_f, itype="corrected")
+            }
+
+    solution_paths = [filter_fluxes_paths[percent][sigma_f] for sigma_f in sigma_fs for percent in percents] \
+        + [filter_fits_paths[percent][sigma_f]["residual"] for sigma_f in sigma_fs for percent in percents] \
+        + [filter_fits_paths[percent][sigma_f]["dirty"] for sigma_f in sigma_fs for percent in percents] \
+        + [filter_fits_paths[percent][sigma_f]["corrected"] for sigma_f in sigma_fs for percent in percents] \
+        + [smoother_fluxes_paths[percent][sigma_f] for sigma_f in sigma_fs for percent in percents] \
+        + [smoother_fits_paths[percent][sigma_f]["residual"] for sigma_f in sigma_fs for percent in percents] \
+        + [smoother_fits_paths[percent][sigma_f]["dirty"] for sigma_f in sigma_fs for percent in percents] \
+        + [smoother_fits_paths[percent][sigma_f]["corrected"] for sigma_f in sigma_fs for percent in percents]
+
+    path = paths["fluxes"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    path = paths["fits"]["kalcal-diag"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    if not filter_fluxes_dir.exists():
+        os.mkdir(filter_fluxes_dir)
+    if not smoother_fluxes_dir.exists():
+        os.mkdir(smoother_fluxes_dir)
+
+    path = paths["fits"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    path = paths["fits"]["kalcal-diag"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    if not filter_fits_dir.exists():
+        os.mkdir(filter_fits_dir)
+    if not smoother_fits_dir.exists():
+        os.mkdir(smoother_fits_dir)
+
+    params.save()
+    
+    if not overwrite:
+        try:
+            check_for_data(*solution_paths)
+            logging.debug("Creating new solutions and images")
+        except DataExistsError:
+            logging.info("No deletion done")            
+            return    
+    else:
+        logging.info("Overwriting previous solutions and images")
+
+    total_runs = n_points * len(percents)
+    model_path = paths["fluxes"]["true"]["files"][100]
+    skymodel = load_data(model_path)
+    model = skymodel["model"]
+    Ix = skymodel["Ix"]
+    Iy = skymodel["Iy"]
+    true_flux = model[Ix, Iy]
+    filter_gains_paths = paths["gains"]["kalcal-diag"]["filter"]["files"]
+    smoother_gains_paths = paths["gains"]["kalcal-diag"]["smoother"]["files"]
+
+    if progress:
+        pbar.total = 2 * total_runs
+
+    logging.info(f"Running line-search on {n_points} points " \
+                + f"({total_runs} runs)")
+    
+    for percent in percents:
+        for sigma_f in sigma_fs:
+            gains_path = filter_gains_paths[percent][sigma_f]
+            flux_path = filter_fluxes_paths[percent][sigma_f]
+            residual_path = filter_fits_paths[percent][sigma_f]["residual"]
+            dirty_path = filter_fits_paths[percent][sigma_f]["dirty"]
+            corrected_path = filter_fits_paths[percent][sigma_f]["corrected"]
+            vis_column = f"DATA_100MP"
+            model_column = f"MODEL_{percent}MP"
+            
+            start = time.time()
+            calculate_recovered_flux(params, gains_path, vis_column, 
+                                model_column, model_path, flux_path, 
+                                residual_path, dirty_path, corrected_path)
+            end = time.time()
+            log_msg = f"kalcal-diag-filter on {percent}MP with "\
+                    + f"`sigma-f={sigma_f:.3g}`, {(end - start):.3g}s taken"
+                         
+            if check_metric:
+                results = load_data(flux_path)
+                recovered_flux = results["flux"]
+                residual = results["residual"]
+                corrected = results["corrected"]
+                mse = mean_square_error(true_flux, recovered_flux)
+                res_rms = np.sqrt(np.square(residual).mean())
+                cor_rms = np.sqrt(np.square(corrected).mean())
+                log_msg += f", with Flux MSE={mse:.3g}, "
+                log_msg += f"Residual RMS={res_rms:.3g}, and "
+                log_msg += f"Corrected RMS={cor_rms:.3g}."
+            
+            logging.info(log_msg)
+            if progress:
+                pbar.update(1)
+                pbar.refresh()
+            
+            gains_path = smoother_gains_paths[percent][sigma_f]
+            flux_path = smoother_fluxes_paths[percent][sigma_f]
+            residual_path = smoother_fits_paths[percent][sigma_f]["residual"]
+            dirty_path = smoother_fits_paths[percent][sigma_f]["dirty"]
+            corrected_path = smoother_fits_paths[percent][sigma_f]["corrected"]
+            vis_column = f"DATA_100MP"
+            model_column = f"MODEL_{percent}MP"
+            
+            start = time.time()
+            calculate_recovered_flux(params, gains_path, vis_column, 
+                                model_column, model_path, flux_path, 
+                                residual_path, dirty_path, corrected_path)
+            end = time.time()
+            log_msg = f"kalcal-diag-smoother on {percent}MP with "\
+                    + f"`sigma-f={sigma_f:.3g}`, {(end - start):.3g}s taken"
+                         
+            if check_metric:
+                results = load_data(flux_path)
+                recovered_flux = results["flux"]
+                residual = results["residual"]
+                corrected = results["corrected"]
+                mse = mean_square_error(true_flux, recovered_flux)
+                res_rms = np.sqrt(np.square(residual).mean())
+                cor_rms = np.sqrt(np.square(corrected).mean())
+                log_msg += f", with Flux MSE={mse:.3g}, "
+                log_msg += f"Residual RMS={res_rms:.3g}, and "
+                log_msg += f"Corrected RMS={cor_rms:.3g}."
+            
+            logging.info(log_msg)
+            if progress:
+                pbar.update(1)
+                pbar.refresh()
+
+    logging.info("Flux extractor complete")
 
 def run_quartical_flux_extractor(params, progress=False, check_metric=False):
     if progress:
@@ -254,13 +664,10 @@ def run_quartical_flux_extractor(params, progress=False, check_metric=False):
     quart_params = params["quartical"]
     status = quart_params["status"]
     t_ints = quart_params["t-ints"]
-    n_points = len(t_ints)
+    n_points = quart_params["n-points"]
 
     if status == "DISABLED":
         logging.info("QuartiCal is disabled, do nothing")
-        logging.info("Updating parameter information")
-        with refreeze(params) as file:
-            file["quartical"]["n-points"] = n_points
         return
     
     logging.info("Retrieved line search t-ints parameters")
@@ -283,14 +690,15 @@ def run_quartical_flux_extractor(params, progress=False, check_metric=False):
                 "residual": fits_dir / \
                     fits_template.format(mp=percent, t_int=t_int, itype="residual"),
                 "dirty": fits_dir / \
-                    fits_template.format(mp=percent, t_int=t_int, itype="dirty")
+                    fits_template.format(mp=percent, t_int=t_int, itype="dirty"),
+                "corrected": fits_dir / \
+                    fits_template.format(mp=percent, t_int=t_int, itype="corrected")
             }
-        
-    refreeze(params)
 
     solution_paths = [fluxes_paths[percent][t_int] for t_int in t_ints for percent in percents] \
         + [fits_paths[percent][t_int]["residual"] for t_int in t_ints for percent in percents] \
-        + [fits_paths[percent][t_int]["dirty"] for t_int in t_ints for percent in percents]
+        + [fits_paths[percent][t_int]["dirty"] for t_int in t_ints for percent in percents] \
+        + [fits_paths[percent][t_int]["corrected"] for t_int in t_ints for percent in percents]
 
     path = paths["fluxes"]["dir"]
     if not path.exists():
@@ -303,6 +711,8 @@ def run_quartical_flux_extractor(params, progress=False, check_metric=False):
     if not fits_dir.exists():
         os.mkdir(fits_dir)
 
+    params.save()
+    
     try:
         check_for_data(*solution_paths)
         logging.debug("Creating new solutions and images")
@@ -331,12 +741,14 @@ def run_quartical_flux_extractor(params, progress=False, check_metric=False):
             flux_path = fluxes_paths[percent][t_int]
             residual_path = fits_paths[percent][t_int]["residual"]
             dirty_path = fits_paths[percent][t_int]["dirty"]
-            vis_column = f"DATA_{percent}MP"
+            corrected_path = fits_paths[percent][t_int]["corrected"]
+            vis_column = f"DATA_100MP"
+            model_column = f"MODEL_{percent}MP"
             
             start = time.time()
             calculate_recovered_flux(params, gains_path, vis_column, 
-                                model_path, flux_path, 
-                                residual_path, dirty_path)
+                                model_column, model_path, flux_path, 
+                                residual_path, dirty_path, corrected_path)
             end = time.time()
             log_msg = f"QuartiCal on {percent}MP with "\
                     + f"`t-int={t_int}`, {(end - start):.3g}s taken"
@@ -345,15 +757,43 @@ def run_quartical_flux_extractor(params, progress=False, check_metric=False):
                 results = load_data(flux_path)
                 recovered_flux = results["flux"]
                 residual = results["residual"]
+                corrected = results["corrected"]
                 mse = mean_square_error(true_flux, recovered_flux)
-                rms = np.sqrt(np.square(residual).mean())
-                log_msg += f", with MSE={mse:.3g} and RMS={rms:.3g}"
+                res_rms = np.sqrt(np.square(residual).mean())
+                cor_rms = np.sqrt(np.square(corrected).mean())
+                log_msg += f", with Flux MSE={mse:.3g}, "
+                log_msg += f"Residual RMS={res_rms:.3g}, and "
+                log_msg += f"Corrected RMS={cor_rms:.3g}."
             
             logging.info(log_msg)
             if progress:
                 pbar.update(1)
                 pbar.refresh()
 
+    logging.info("Flux extractor complete")
+
+
+def run_single_flux_extractor(params, gains_path, vis_column, model_column, flux_path, fits_path):
+    logging.debug("Invoking function")
+    paths = params["paths"]
+    residual_path = Path(str(fits_path).format(itype="residual"))
+    dirty_path = Path(str(fits_path).format(itype="dirty"))
+    corrected_path = Path(str(fits_path).format(itype="corrected"))
+    solution_paths = [
+        flux_path, residual_path, dirty_path, corrected_path
+    ]
+    try:
+        check_for_data(*solution_paths)
+        logging.debug("Creating new solutions and images")
+    except DataExistsError:
+        logging.info("No deletion done")            
+        return    
+    
+    model_path = paths["fluxes"]["true"]["files"][100]
+    logging.info("Running flux extractor")
+    calculate_recovered_flux(params, gains_path, vis_column,
+                        model_column, model_path, flux_path, 
+                        residual_path, dirty_path, corrected_path)
     logging.info("Flux extractor complete")
 
 

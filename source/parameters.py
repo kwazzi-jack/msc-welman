@@ -1,8 +1,11 @@
 import os
+import pprint
 from pathlib import Path
 from typing import Any
 import yaml
+import json
 import pickle
+import numpy as np
 from copy import copy
 from datetime import datetime
 from source.other import check_for_data
@@ -214,73 +217,81 @@ def path_constructor(loader, node):
     value = loader.construct_sequence(node)
     return Path(*value)
 
-YamlLoader.add_constructor('tag:yaml.org,2002:python/object/apply:pathlib.PosixPath', path_constructor)
+def numpy_scalar_constructor(loader, node):
+    values = loader.construct_sequence(node)
+    scalar_type = values[0]
+    scalar_value = values[1:]
+    return np.array(scalar_value, dtype=scalar_type)
 
-class YamlDict(dict):
+YamlLoader.add_constructor('tag:yaml.org,2002:python/object/apply:pathlib.PosixPath', path_constructor)
+YamlLoader.add_constructor('tag:yaml.org,2002:python/object/apply:numpy.core.multiarray.scalar', numpy_scalar_constructor)
+
+class Parameters(dict):
     def __init__(self, path, **kwargs):
-        logging.debug(f"Creating YamlDict for `{path}`")
-        keys = kwargs.keys()
-        self.__overwrite = kwargs["overwrite"] if "overwrite" in keys else False
-        self.__freeze = False
+        logging.debug(f"Creating Parameters for `{path}`")
+        self.__overwrite = kwargs.get("overwrite", False)
         self.__path = Path(path)
         super().__init__({})
-
         if not self.__overwrite:
             try:
                 self.__load()
-                logging.debug("Load from file")
-            except:
-                logging.debug("Load empty")
                 
-        self.__freeze = kwargs["freeze"] if "freeze" in keys else False
-        logging.debug(f"Frozen? {self.__freeze}")
+                logging.debug("Load from file")
+            except Exception as error:
+                print(error)
+                logging.debug("Load empty") 
+        if not kwargs.get("hault", False):
+            self.save()
     
     @property
     def path(self):
         return self.__path
-    
-    def freeze(self):
-        if not self.__freeze:
-            logging.debug("Set to freeze")
-            self.__save()
-            self.__freeze = True
-        
-    def unfreeze(self):
-        if self.__freeze:
-            logging.debug("Set to unfreeze")
-            self.__save()
-            self.__freeze = False
 
     def __load(self):
-        with open(self.__path, "r") as file:
-            new_dict = yaml.load(file, Loader=YamlLoader)
-        print(new_dict)
+        with open(self.__path, "rb") as file:
+            new_dict = pickle.load(file)
+
         for key, value in new_dict.items():
             self.__setitem__(key, value)
 
-    def __save(self):
-        with open(self.__path, "w") as file:
-            file.write(yaml.dump(self.copy()))
+    def save(self):
+        with open(self.__path, "wb") as file:
+            pickle.dump(self.copy(), file, protocol=pickle.HIGHEST_PROTOCOL)
 
     def __setitem__(self, key, value) -> None:
         super().__setitem__(key, value)
-        if not self.__freeze:
-            self.__save()
         logging.debug(f"`{self.__path}` added: `{key}`")
         
-    def __repr__(self) -> str:
-        return super().__repr__()
+    def __repr__(self):
+        return self._custom_printer(self, depth=0)
     
+    def _custom_printer(self, data, depth=0, is_last=False):
+        indent = '│   ' * depth
+        branch = '└── ' if is_last else '├── '
+
+        result = ''
+        if depth == 0:
+            result += f"{self.__path}:"
+
+        if isinstance(data, dict):
+            result += '\n'
+            keys = sorted(data.keys())
+            for i, key in enumerate(keys):
+                value = data[key]
+                is_last = (i == len(keys) - 1)
+
+                result += f'{indent}│   {branch} {key}: '
+
+                if isinstance(value, dict):
+                    result += self._custom_printer(value, depth + 1, is_last=is_last)
+                else:
+                    value_str = f'"{value}"' if isinstance(value, str) and not value else str(value)
+                    result += f'{value_str}\n'
+
+        return result
+
     def __str__(self) -> str:
         return super().__str__()
-
-@contextmanager
-def refreeze(x):
-    x.unfreeze()
-    try:
-        yield x
-    finally:
-        x.freeze() 
 
 
 class SmartFolder:
