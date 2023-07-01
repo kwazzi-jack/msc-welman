@@ -147,7 +147,7 @@ def calculate_recovered_flux(params, gains_file, vis_column,
         ANT1 = tb.getcol("ANTENNA1")
         ANT2 = tb.getcol("ANTENNA2")
         vis = tb.getcol(vis_column)[..., 0].astype(np.complex128)
-        model_vis = tb.getcol(model_column)[..., 0].astype(np.complex128)
+        model_vis = tb.getcol("MODEL_100MP")[..., 0].astype(np.complex128)
 
     with table(f"{ms_path}::FIELD", ack=False) as tb:
         RADEC = tb.getcol('PHASE_DIR')[0][0]     
@@ -215,19 +215,15 @@ def calculate_recovered_flux(params, gains_file, vis_column,
 
     # Retrieve flux per source based on positions
     recovered_flux = recovered_image[Ix, Iy]
-    
-    recovered_vis = dirty2ms(uvw=UVW, freq=FREQ, dirty=recovered_image,
-                    pixsize_x=cell_rad, pixsize_y=cell_rad,
-                    epsilon=tol, nthreads=n_cpu, do_wstacking=True)
     logging.debug("Corrected-residual image created")
 
-    residual_image = ms2dirty(uvw=UVW, freq=FREQ, ms=S * G.conj() * (vis - G * recovered_vis),
+    residual_image = ms2dirty(uvw=UVW, freq=FREQ, ms=S * G.conj() * (vis - G * model_vis),
                     npix_x=nx, npix_y=ny,
                     pixsize_x=cell_rad, pixsize_y=cell_rad,
                     epsilon=tol, nthreads=n_cpu, do_wstacking=True)
     
-    corrected_image = ms2dirty(uvw=UVW, freq=FREQ, ms=S * G.conj() * (vis - G * model_vis),
-                    npix_x=nx, npix_y=ny,
+    corrected_image = ms2dirty(uvw=UVW, freq=FREQ, ms=vis/G,
+                    npix_x=nx, npix_y=ny, wgt=W,
                     pixsize_x=cell_rad, pixsize_y=cell_rad,
                     epsilon=tol, nthreads=n_cpu, do_wstacking=True)
     
@@ -248,6 +244,7 @@ def calculate_recovered_flux(params, gains_file, vis_column,
     image_to_fits(corrected_image, cell_rad, corrected_file, FREQ[0], RADEC)
     image_to_fits(dirty_image, cell_rad, dirty_file, FREQ[0], RADEC)
     logging.debug("Fits files saved")
+
 
 def run_kalcal_full_flux_extractor(params, progress=False, check_metric=False, overwrite=False):
     if progress:
@@ -330,7 +327,7 @@ def run_kalcal_full_flux_extractor(params, progress=False, check_metric=False, o
     path = paths["fluxes"]["dir"]
     if not path.exists():
         os.mkdir(path)
-    path = paths["fluxes"]["kalcal-full"]["dir"]
+    path = paths["fits"]["kalcal-full"]["dir"]
     if not path.exists():
         os.mkdir(path)
     if not filter_fluxes_dir.exists():
@@ -646,7 +643,7 @@ def run_kalcal_diag_flux_extractor(params, progress=False, check_metric=False, o
 
     logging.info("Flux extractor complete")
 
-def run_quartical_flux_extractor(params, progress=False, check_metric=False):
+def run_quartical_flux_extractor(params, progress=False, check_metric=False, overwrite=False):
     if progress:
         pbar = progress_bar("Images")
 
@@ -713,13 +710,16 @@ def run_quartical_flux_extractor(params, progress=False, check_metric=False):
 
     params.save()
     
-    try:
-        check_for_data(*solution_paths)
-        logging.debug("Creating new solutions and images")
-    except DataExistsError:
-        logging.info("No deletion done")            
-        return    
-
+    if not overwrite:
+        try:
+            check_for_data(*solution_paths)
+            logging.debug("Creating new solutions")
+        except DataExistsError:
+            logging.info("No deletion done")
+            return
+    else:
+        logging.debug("Overwriting previous solutions")
+        
     total_runs = n_points * len(percents)
     model_path = paths["fluxes"]["true"]["files"][100]
     skymodel = load_data(model_path)
@@ -772,120 +772,65 @@ def run_quartical_flux_extractor(params, progress=False, check_metric=False):
 
     logging.info("Flux extractor complete")
 
-
-def run_single_flux_extractor(params, gains_path, vis_column, model_column, flux_path, fits_path):
+def run_true_flux_extractor(params, overwrite=False):
     logging.debug("Invoking function")
     paths = params["paths"]
-    residual_path = Path(str(fits_path).format(itype="residual"))
-    dirty_path = Path(str(fits_path).format(itype="dirty"))
-    corrected_path = Path(str(fits_path).format(itype="corrected"))
-    solution_paths = [
-        flux_path, residual_path, dirty_path, corrected_path
-    ]
-    try:
-        check_for_data(*solution_paths)
-        logging.debug("Creating new solutions and images")
-    except DataExistsError:
-        logging.info("No deletion done")            
-        return    
-    
-    model_path = paths["fluxes"]["true"]["files"][100]
-    logging.info("Running flux extractor")
-    calculate_recovered_flux(params, gains_path, vis_column,
-                        model_column, model_path, flux_path, 
-                        residual_path, dirty_path, corrected_path)
-    logging.info("Flux extractor complete")
 
+    if params["seed"]:
+        logging.info(f"Setting seed to {params['seed']}")
+        np.random.seed(params["seed"])
+    else:
+        logging.info(f"No seed set")
 
-def run_quartical_wsclean_imaging(params):
-    logging.debug("Invoking function")
-    paths = params["paths"]
-    gains_dir = paths["gains"]["quartical"]
     percents = params["percents"]
+    fits_paths = paths["fits"]["true"]["files"]
+    fits_dir = paths["fits"]["true"]["dir"]
+    fits_template = paths["fits"]["true"]["template"]
+    flux_paths = {percent: paths["fluxes"]["true"]["dir"] / f"true-flux-{percent}mp.npz" for percent in percents}
+    paths["fluxes"]["true"]["files"]["solved"] = flux_paths
+    fits_paths["residual"] = {}
+    fits_paths["dirty"] = {}
+    fits_paths["corrected"] = {}
 
-    try:
-        fits_paths = paths["fits"]["quartical"]
-        fits_keys = fits_paths.keys()
-
-        for percent in percents:
-            if percent not in fits_keys:
-                raise KeyError
-            
-        for key in fits_keys:
-            if key not in percents:
-                raise KeyError
-        
-        logging.debug("QuartiCal paths match")
-
-    except:
-        logging.info("Updating path data")
-        data_dir = paths["data-dir"]
-        with refreeze(paths) as file:
-            if file.get("fits", True):
-                file["fits"] = {
-                    "dir" : data_dir / "fits"
-                }
-            fits_dir = file["fits"]
-            os.makedirs(file["fits"]["dir"], exist_ok=True)
-
-            if fits_dir.get("quartical", True):
-                file["fits"]["quartical"] = {
-                    "dir" : data_dir / "fits" / "quartical"
-                }
-            quartical_fits = fits_dir["quartical"]
-            os.makedirs(fits_dir["quartical"]["dir"], exist_ok=True)
-
-        logging.debug("Gains folders missing, created.")
-    logging.info("Fetching imaging parameters")
-    rms_noise = calculate_image_noise_rms(params)
-
-    model_data = load_data(paths["fluxes"]["true"][100])
-    n_pix = int(model_data["model"].shape[0])
-    cell_asec = int(model_data["cell_asec"])
-    t_ints = params["quartical"]["t-ints"]
-    total_runs = len(t_ints) * len(percents)
-
-    logging.info(f"Running `wsclean` on {total_runs} QuartiCal results.")
     for percent in percents:
-        fits_paths = []
-        for i, t_int in enumerate(t_ints):
-            gains_path = gains_dir[percent][i]
-            fits_path = quartical_fits["dir"] / \
-                f"quartical-{percent}mp-t_int-{t_int}"
-            
-            calculate_imaging_columns(gains_path, params)
+        fits_paths["residual"][percent] = fits_dir / fits_template.format(itype="residual", mp=percent)
+        fits_paths["dirty"][percent] = fits_dir / fits_template.format(itype="dirty", mp=percent)
+        fits_paths["corrected"][percent] = fits_dir / fits_template.format(itype=f"corrected", mp=percent)
 
-            wsclean_args = [
-                "wsclean",
-                "-j", str(params["n-cpu"]),
-                "-abs-mem", "100",
-                "-pol", "XX",
-                "-size", str(n_pix), str(n_pix),
-                "-scale", f"{cell_asec}asec",
-                "-weight", f"briggs", "0.0",
-                "-no-dirty", 
-                "-niter", str(int(1e6)),
-                "-threshold", str(2 * rms_noise),
-                "-data-column", "CORRECTED_DATA",
-                "-name", str(fits_path),
-                str(paths["ms-path"])
-            ]
+    solution_paths = [fits_paths[itype][percent] for percent in percents for itype in fits_paths.keys()]
 
-            start = time()
-            with open(os.devnull, 'w') as fp:
-                subprocess.Popen(wsclean_args, 
-                              stdout=fp, stderr=fp).wait()
-            
-            end = time()
+    if not fits_dir.exists():
+        os.mkdir(fits_dir)
+    params.save()
+    
+    if not overwrite:
+        try:
+            check_for_data(*solution_paths)
+            logging.debug("Creating new solutions and images")
+        except DataExistsError:
+            logging.info("No deletion done")            
+            return    
+    else:
+        logging.info("Overwriting previous solutions and images")
 
-            fits_paths.append(fits_path)
+    model_path = paths["fluxes"]["true"]["files"][100]
+    skymodel = load_data(model_path)
+    gains_path = paths["gains"]["true"]["files"]
 
-            logging.info(f"Finished `wsclean` with QuartiCal on {percent}MP with "\
-                    + f"`t-int={t_int}`, {(end - start):.3g}s taken")
-            
-        logging.debug(f"Saving fits files paths for {percent}MP")    
-        with refreeze(paths) as file:
-            quartical_fits[percent] = fits_paths
+    for percent in percents:
+        flux_path = flux_paths[percent]
+        residual_path = fits_paths["residual"][percent]
+        dirty_path = fits_paths["dirty"][percent]
+        corrected_path = fits_paths["corrected"][percent]
+        vis_column = f"DATA_100MP"
+        model_column = f"MODEL_{percent}MP"
+        
+        calculate_recovered_flux(params, gains_path, vis_column, 
+                            model_column, model_path, flux_path, 
+                            residual_path, dirty_path, corrected_path)
+        
+        logging.info(f"Completed true images on {percent}MP")
+    logging.info("Flux extractor complete")
 
 def run_single_wsclean_imaging(gains_path, fits_name, params):
     logging.debug("Invoking function")

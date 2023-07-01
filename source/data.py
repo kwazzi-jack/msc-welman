@@ -48,7 +48,7 @@ def measurement_set_options(params, no_gui=False):
     settings["telescope"] = (
         "Radio Telescope Array",
         "Choose the radiointerferometer to use for the experiment. Default: MeerKAT.",
-        ["MeerKAT", "KAT-7", "VLA-A", "VLA-B"],
+        ["MeerKAT", "KAT-7", "VLA-A", "VLA-B", "VLA-C", "VLA-D"],
     )
     logging.debug("Setting added: `telescope`")
 

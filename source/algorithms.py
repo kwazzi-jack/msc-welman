@@ -6,7 +6,7 @@ from pathlib import Path
 from IPython.display import clear_output, display
 from source.data import load_data
 from source.other import check_for_data, DataExistsError, progress_bar
-from source.metrics import mean_square_error
+from source.metrics import mean_square_error, create_benchmarker
 import numpy as np
 import os
 import logging
@@ -197,7 +197,7 @@ def compute_sinv_vector(model, weight, gains, tinv, ant1, ant2):
     return 1.0 - 0.25 * weight * temp
 
 
-@njit(fastmath=True, nogil=True)
+@njit(fastmath=True, nogil=True, cache=True, parallel=True)
 def diag_filter(data, model, weight, mp, pp, q, calcPhi=False):
     """Filter algorithm of kalcal-diag that uses diagonal
     approximation and various optimizations to perform
@@ -288,7 +288,7 @@ def diag_filter(data, model, weight, mp, pp, q, calcPhi=False):
     return m, p, phi
 
 
-@njit(fastmath=True, nogil=True)
+@njit(fastmath=True, nogil=True, cache=True, parallel=True)
 def diag_smoother(m, p, q): 
     """Smoother algorithm of kalcal-diag that uses diagonal 
     approximation and various optimizations to perform 
@@ -383,7 +383,6 @@ def kalcal_diag(msname, **kwargs):
     # Calculate axis lengths
     n_ant = np.max((ant1.max(), ant2.max())) + 1
     n_bl = n_ant * (n_ant - 1)//2
-    n_time = model.shape[0]/n_bl
     
     # Create priors
     sigma_f = kwargs["sigma_f"]
@@ -484,12 +483,16 @@ def kalcal_diag_options(params, no_gui=False):
 
 
 def run_kalcal_diag_calibration(kal_diag_options, params, 
-                                check_mse=False, progress=False):
+                                check_mse=False, progress=False, overwrite=False):
     if progress:
         pbar = progress_bar("Runs")
 
     logging.debug("Invoking function")
     paths = params["paths"]
+
+    np.random.seed(int(time.time()))
+    algorithm_id = hex(int(np.random.random() * 1e6))
+    logging.debug(f"Algorithm ID: {algorithm_id}")
 
     if params["seed"]:
         logging.info(f"Setting seed to {params['seed']}")
@@ -521,6 +524,8 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
         return
     
     sigma_fs = np.round(np.logspace(lb, ub, n_points), prec)
+    params["kalcal-diag"]["sigma-fs"] = sigma_fs
+    params.save()
     logging.info("Calculated line search process noise parameters")
 
     logging.info("Updating path data")
@@ -554,18 +559,23 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
         os.mkdir(smoother_dir)
 
     params.save()
-    try:
-        check_for_data(*solution_paths)
-        logging.debug("Creating new solutions")
-    except DataExistsError:
-        logging.info("No deletion done")
-        return
-    
+    if not overwrite:
+        try:
+            check_for_data(*solution_paths)
+            logging.debug("Creating new solutions")
+        except DataExistsError:
+            logging.info("No deletion done")
+            return
+    else:
+        logging.debug("Overwriting previous solutions")
+
     total_runs = n_points * len(percents)
     true_gains = load_data(paths["gains"]["true"]["files"])["gains"]
         
     if progress:
         pbar.total = total_runs
+
+    benchmark = create_benchmarker(params, "kalcal-diag")
 
     logging.warning("May take long to start. `numba` is compiling the functions.")
     logging.info(f"Running line-search on {n_points} points " \
@@ -575,20 +585,20 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
         for sigma_f in sigma_fs:
             filter_path = filter_paths[percent][sigma_f]
             smoother_path = smoother_paths[percent][sigma_f]
-            start = time.time()
-            kalcal_diag(
-                str(paths["data"]["ms"]),
-                vis_column="DATA_100MP",
-                model_column=f"MODEL_{percent}MP",
-                sigma_f=float(sigma_f),
-                calcPhi=True,
-                out_filter=filter_path,
-                out_smoother=smoother_path
-            )
-            end = time.time()
+            
+            with benchmark(algorithm_id, percent, sigma_f):
+                kalcal_diag(
+                    str(paths["data"]["ms"]),
+                    vis_column="DATA_100MP",
+                    model_column=f"MODEL_{percent}MP",
+                    sigma_f=float(sigma_f),
+                    calcPhi=True,
+                    out_filter=filter_path,
+                    out_smoother=smoother_path
+                )
 
             log_msg = f"kalcal-diag on {percent}MP with "\
-                    + f"`sigma_f={sigma_f:.3e}`, {(end - start):.3g}s taken"
+                    + f"`sigma_f={sigma_f:.3e}`"
                          
             if check_mse:
                 filter_gains = load_data(filter_path)["gains"]
@@ -606,7 +616,7 @@ def run_kalcal_diag_calibration(kal_diag_options, params,
 
     logging.info("Calibration complete")
 
-@njit(fastmath=True, nogil=True)
+@njit(fastmath=True, nogil=True, cache=True)
 def cholesky_inv(X):
     """Perform matrix inverse using 
     cholesky decomposition."""
@@ -635,7 +645,7 @@ def isaugmented(X):
     return np.isclose(X11, X22.conj()).all() and np.isclose(X12, X21.conj()).all()
 
 
-@njit(fastmath=True, inline="always")
+@njit(fastmath=True, cache=True)
 def stack_vector(x):
     """Stack the input vector with its conjugate
     form.
@@ -653,8 +663,9 @@ def stack_vector(x):
     return np.hstack((x, x.conjugate()))
 
 
-@njit(fastmath=True, inline="always", parallel=False)
-def populate_jacobian(J, model, weight, ant1, ant2, gains):
+@njit(fastmath=True, cache=True)
+def populate_jacobian(J, model, weight, ant1, ant2, 
+                      gains, n_ant, n_bl):
     """Populate the augmented Jacobian evaluated with data
     and gains terms for the given time step.
     
@@ -673,37 +684,46 @@ def populate_jacobian(J, model, weight, ant1, ant2, gains):
         Antenna Index Array 1.
     ant2: Complex128[:], (N_bl,)
         Antenna Index Array 2.
-        
+    n_ant: Float64 
+        Number of antennas in array.
+    n_bl: Float64
+        Number of baselines in array.
     Returns
     -------
     J : Complex128[:, :], (2*N_bl, 2*N_ant)
         Newly populated [Augmented] Jacobian term.
     """
     
-    # Calculate axis lengths
-    n_bl, n_ant = model.size, gains.size//2
-    
     # Populate Array
     for b in range(n_bl):
         p, q = ant1[b], ant2[b]
         w = np.sqrt(weight[b])
 
+        # Common computations
+        b_star, p_star, q_star = b + n_bl, p + n_ant, q + n_ant
+        Mpq = model[b]
+        Mpq_star = Mpq.conjugate()
+        Mpq *= w/2
+        Mpq_star *= w/2
+        gp, gp_star = gains[p], gains[p_star]
+        gq, gq_star = gains[q], gains[q_star]
+        
         # Top Left block (normal Jacobian)
-        J[b, p] = 1/2 * w * model[b] * gains[n_ant + q]
+        J[b, p] = Mpq * gq_star
 
         # Top Right block (conjugate Jacobian)
-        J[b, n_ant + q] = 1/2 * w * model[b] * gains[p]
+        J[b, q_star] = Mpq * gp
 
         # Bottom Left block (conjugate Jacobian)
-        J[n_bl + b, q] = 1/2 * w * model[b].conjugate() * gains[p + n_ant]
+        J[b_star, q] = Mpq_star * gp_star
 
         # Bottom Right block (normal Jacobian)
-        J[n_bl + b, n_ant + p] = 1/2 * w * model[b].conjugate() * gains[q]
+        J[b_star, p_star] = Mpq_star * gq
     
     # Return populated augmented Jacobian
     return J
         
-@njit(fastmath=True, nogil=True)
+@njit(fastmath=True, nogil=True, cache=True)
 def full_filter(data, model, weight, mp, Pp, Q, calcPhi=False):
     """Filter algorithm of kalcal-full that uses the pure
     implementation and various optimizations to perform
@@ -756,7 +776,8 @@ def full_filter(data, model, weight, mp, Pp, Q, calcPhi=False):
     
     # Data arrays
     J = np.zeros((2 * n_bl, 2 * n_ant), dtype=np.complex128)
-    I = np.eye(2 * n_bl).astype(np.complex128)
+    I_ant = np.eye(2 * n_ant).astype(np.complex128)
+    I_bl = np.eye(2 * n_bl).astype(np.complex128)
     
     # Introduce prior into the loop
     m[-1], P[-1] = mp, Pp
@@ -777,17 +798,18 @@ def full_filter(data, model, weight, mp, Pp, Q, calcPhi=False):
         weight_slice = weight[bl_slice]
         
         # Compute Jacobian, measurement vector and error vector
-        J = populate_jacobian(J, model_slice, weight_slice, ant1, ant2, m[k - 1])
+        J = populate_jacobian(J, model_slice, weight_slice, ant1, ant2, 
+                              mp, n_ant, n_bl)
         v = stack_vector(np.sqrt(weight_slice) * data_slice)
         e = v - J @ mp
         
         # Update Step
         JH = J.conjugate().T
         T = cholesky_inv(Pp) + JH @ J + jitter
-        Sinv = I - J @ cholesky_inv(T) @ JH
+        Sinv = I_bl - J @ cholesky_inv(T) @ JH
         K = Pp @ JH @ Sinv        
         m[k] = mp + K @ e
-        P[k] = Pp - K @ J @ Pp
+        P[k] = (I_ant - K @ J) @ Pp
         
         # If true, calculate phi_k
         if calcPhi:
@@ -799,7 +821,7 @@ def full_filter(data, model, weight, mp, Pp, Q, calcPhi=False):
     return m, P, phi
 
 
-@njit(fastmath=True, nogil=True)
+@njit(fastmath=True, nogil=True, cache=True)
 def full_smoother(m, P, Q):
     """Smoother algorithm of kalcal-full that uses the pure
     implementation and various optimizations to perform 
@@ -836,13 +858,14 @@ def full_smoother(m, P, Q):
     # Run smoother recursively, skip last time step
     for k in range(-2, -(n_time + 1), -1):
         # Prediction step
-        mp, Pp = m[k], P[k] + Q
+        mp, Pt = m[k], P[k]
+        Pp = Pt + Q
         
         # Smoothing step
         Pinv = inv(Pp)
-        W = P[k] @ Pinv
-        ms[k] = m[k] + W @ (ms[k + 1] - mp)
-        Ps[k] = P[k] + W @ (Ps[k + 1] - Pp) @ W.conjugate().T
+        W = Pt @ Pinv
+        ms[k] = mp + W @ (ms[k + 1] - mp)
+        Ps[k] = Pt + W @ (Ps[k + 1] - Pp) @ W.conjugate().T
     
     # Return smoother results
     return ms, Ps
@@ -887,21 +910,18 @@ def kalcal_full(msname, **kwargs):
     with table(msname, ack=False) as tb:
         data = tb.getcol(kwargs["vis_column"])[..., 0, 0].astype(np.complex128)
         model = tb.getcol(kwargs["model_column"])[..., 0, 0].astype(np.complex128)
-        weight = tb.getcol("WEIGHT")[..., 0].astype(np.complex128)
+        weight = tb.getcol("WEIGHT")[..., 0].astype(np.float64)
         ant1 = tb.getcol("ANTENNA1")
         ant2 = tb.getcol("ANTENNA2")
 
     # Calculate axis lengths
     n_ant = np.max((ant1.max(), ant2.max())) + 1
-    n_bl = n_ant * (n_ant - 1)//2
-    n_time = model.shape[0]//n_bl
     
     # Create priors and data terms
     sigma_f = kwargs["sigma_f"]
     mp = np.ones((2*n_ant,), dtype=np.complex128)
     Pp = np.eye(2*n_ant, dtype=np.complex128)
     Q = sigma_f**2 * np.eye(2*n_ant, dtype=np.complex128)
-    J = np.zeros((2*n_bl, 2*n_ant), dtype=np.complex128)
 
     # Run filter
     m, P, phi = full_filter(data, model, weight, mp, Pp, Q, kwargs["calcPhi"])
@@ -995,12 +1015,18 @@ def kalcal_full_options(params, no_gui=False):
     return settings
 
 def run_kalcal_full_calibration(kal_full_options, params, 
-                                check_mse=False, progress=False):
+                                check_mse=False, progress=False, 
+                                overwrite=False, resume=False):
+    
     if progress:
         pbar = progress_bar("Runs")
 
     logging.debug("Invoking function")
     paths = params["paths"]
+
+    np.random.seed(int(time.time()))
+    algorithm_id = hex(int(np.random.random() * 1e6))
+    logging.debug(f"Algorithm ID: {algorithm_id}")
 
     if params["seed"]:
         logging.info(f"Setting seed to {params['seed']}")
@@ -1018,161 +1044,139 @@ def run_kalcal_full_calibration(kal_full_options, params,
     lb = kal_full_options["low-bound"]
     ub = kal_full_options["up-bound"]
 
-    params["kalcal-diag"] = {
+    params["kalcal-full"] = {
             "status" : status,
             "n-points" : n_points,
             "prec" : prec,
             "low-bound": lb,
             "up-bound": ub
-        }
+    }
     params.save()
-    
+
     if status == "DISABLED":
-        logging.info("kalcal-full is disabled, do nothing")
+        logging.info("kalcal-full is disabled, do nothing")        
         return
     
     sigma_fs = np.round(np.logspace(lb, ub, n_points), prec)
+    params["kalcal-full"]["sigma-fs"] = sigma_fs
+    params.save()
     logging.info("Calculated line search process noise parameters")
 
-    try:
-        filter_paths = paths["gains"]["kalcal-full"]["filter"]
-        smoother_paths = paths["gains"]["kalcal-full"]["smoother"]
-        filter_keys = filter_paths.keys()
-        smoother_keys = smoother_paths.keys()
+    logging.info("Updating path data")
+    filter_paths = paths["gains"]["kalcal-full"]["filter"]["files"]
+    filter_dir = paths["gains"]["kalcal-full"]["filter"]["dir"]
+    filter_template = paths["gains"]["kalcal-full"]["filter"]["template"]
+    smoother_paths = paths["gains"]["kalcal-full"]["smoother"]["files"]
+    smoother_dir = paths["gains"]["kalcal-full"]["smoother"]["dir"]
+    smoother_template = paths["gains"]["kalcal-full"]["smoother"]["template"]
+    for percent in percents:
+        filter_paths[percent] = {}
+        smoother_paths[percent] = {}
+        for sigma_f in sigma_fs:
+            filter_paths[percent][sigma_f] = filter_dir / filter_template.format(
+                                                            mp=percent, sigma_f=sigma_f)
+            smoother_paths[percent][sigma_f] = smoother_dir / smoother_template.format(
+                                                            mp=percent, sigma_f=sigma_f)
+    
+    solution_paths = [filter_paths[percent][sigma_f] for sigma_f in sigma_fs for percent in percents]
+    solution_paths += [smoother_paths[percent][sigma_f] for sigma_f in sigma_fs for percent in percents]
 
-        for percent in percents:
-            if percent not in filter_keys:
-                raise KeyError
-            
-            if percent not in smoother_keys:
-                raise KeyError
-            
-        for key in filter_keys:
-            if key not in percents:
-                raise KeyError
+    path = paths["gains"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    path = paths["gains"]["kalcal-full"]["dir"]
+    if not path.exists():
+        os.mkdir(path)
+    if not filter_dir.exists():
+        os.mkdir(filter_dir)
+    if not smoother_dir.exists():
+        os.mkdir(smoother_dir)
 
-        for key in smoother_keys:
-            if key not in percents:
-                raise KeyError
-        
-        logging.debug("Filter and smoother paths match")
+    params.save()
+    filter_run_flags = {percent: n_points * [1] for percent in percents}
+    smoother_run_flags = {percent: n_points * [1] for percent in percents}
+    
+    if not overwrite:
+        if resume:
+            logging.info("Checking for stopped runs")
+            for percent in percents:
+                for i, sigma_f in enumerate(sigma_fs):
+                    filter_path = filter_paths[percent][sigma_f]
+                    smoother_path = smoother_paths[percent][sigma_f]
+                    if filter_path.exists():
+                        filter_run_flags[percent][i] = 0
+                    if smoother_path.exists():
+                        smoother_run_flags[percent][i] = 0   
 
-        try:
-            files = os.listdir(filter_paths["dir"])
-            if len(files):
-                check_for_data(*files)
-            files = os.listdir(smoother_paths["dir"])
-            if len(files):
-                check_for_data(*files)
+        filter_resume = np.array([arr for arr in filter_run_flags.values()])
+        smoother_resume = np.array([arr for arr in smoother_run_flags.values()])
 
-            os.remove(filter_paths["dir"])
-            while not os.path.exists(filter_paths["dir"]):
-                time.sleep(0.1)
-            os.mkdir(filter_paths["dir"])
+        if not (filter_resume.any() and smoother_resume.any()):
+            try:
+                check_for_data(*solution_paths)
+                logging.debug("Creating new solutions")
+                filter_run_flags = {percent: n_points * [1] for percent in percents}
+                smoother_run_flags = {percent: n_points * [1] for percent in percents}
+            except DataExistsError:
+                logging.info("No deletion done")
+                return
+        else:
+            total = filter_resume.sum() - smoother_resume.sum()
+            logging.info(f"Missing {total} solutions, resuming")
+    else:
+        logging.debug("Overwriting previous solutions")
 
-            os.remove(smoother_paths["dir"])
-            while not os.path.exists(smoother_paths["dir"]):
-                time.sleep(0.1)
-            os.mkdir(smoother_paths["dir"])
-            logging.debug("Deleted filter and smoother gains")
-        except DataExistsError:
-            logging.info("No deletion done, returning.")
-            return 
-        logging.debug("Gains folders exist, cleaned folders.")
-    except:
-        logging.info("Updating path data")
-        data_dir = paths["data-dir"]
-        with refreeze(paths) as file:
-            if file["gains"].get("kalcal-full", True):
-                file["gains"]["kalcal-full"] = {
-                    "dir" : data_dir / "gains" / "kalcal-full"
-                }        
-                os.makedirs(paths["gains"]["kalcal-full"]["dir"], 
-                            exist_ok=True)
-            kalcal_dir = file["gains"]["kalcal-full"]
-
-            if kalcal_dir.get("filter", True):
-                file["gains"]["kalcal-full"]["filter"] = {
-                    "dir" : data_dir / "gains" / "kalcal-full" / "filter"
-                }
-                os.makedirs(paths["gains"]["kalcal-full"]["filter"]["dir"], 
-                            exist_ok=True)
-
-            if kalcal_dir.get("smoother", True):
-                file["gains"]["kalcal-full"]["smoother"] = {
-                    "dir" : data_dir / "gains" / "kalcal-full" / "smoother"
-                }
-                os.makedirs(paths["gains"]["kalcal-full"]["smoother"]["dir"], 
-                            exist_ok=True)
-        logging.debug("Gains folders missing, created.")
-
-    filter_dir = paths["gains"]["kalcal-full"]["filter"]
-    smoother_dir = paths["gains"]["kalcal-full"]["smoother"]
     total_runs = n_points * len(percents)
-    true_gains = load_data(paths["gains"]["true"])["true_gains"]
-        
+    true_gains = load_data(paths["gains"]["true"]["files"])["gains"]
+    
     if progress:
         pbar.total = total_runs
+
+    benchmark = create_benchmarker(params, "kalcal-full")
 
     logging.warning("May take long to start. `numba` is compiling the functions.")
     logging.info(f"Running line-search on {n_points} points " \
                 + f"({total_runs} runs)")
     logging.info(rf"Using interval [1e{lb}, 1e{ub}].")
     for percent in percents:
-        filter_paths = []
-        smoother_paths = []
-        for sigma_f in sigma_fs:
-            filter_path = filter_dir["dir"] / \
-                f"kalcal-full-gains-filter-{percent}mp-sigma_f-{sigma_f}.npz"
-            smoother_path = smoother_dir["dir"] / \
-                f"kalcal-full-gains-smoother-{percent}mp-sigma_f-{sigma_f}.npz" 
+        for i, sigma_f in enumerate(sigma_fs):
+            if filter_run_flags[percent][i] and smoother_run_flags[percent][i]:
+                filter_path = filter_paths[percent][sigma_f]
+                smoother_path = smoother_paths[percent][sigma_f]
+                
+                with benchmark(algorithm_id, percent, sigma_f):
+                    kalcal_full(
+                        str(paths["data"]["ms"]),
+                        vis_column="DATA_100MP",
+                        model_column=f"MODEL_{percent}MP",
+                        sigma_f=float(sigma_f),
+                        calcPhi=True,
+                        out_filter=filter_path,
+                        out_smoother=smoother_path
+                    )
 
-            start = time.time()
-            kalcal_full(
-                str(paths["data"]["ms"]),
-                vis_column="DATA_100MP",
-                model_column=f"MODEL_{percent}MP",
-                sigma_f=float(sigma_f),
-                calcPhi=True,
-                out_filter=filter_path,
-                out_smoother=smoother_path
-            )
-            end = time.time()
+                log_msg = f"kalcal-full on {percent}MP with "\
+                        + f"`sigma_f={sigma_f:.3g}`"
+                            
+                if check_mse:
+                    filter_gains = load_data(filter_path)["gains"]
+                    filter_mse = mean_square_error(true_gains, filter_gains)
 
-            filter_paths.append(filter_path)
-            smoother_paths.append(smoother_path)
-            log_msg = f"kalcal-full on {percent}MP with "\
-                    + f"`sigma_f={sigma_f:.3e}`, {(end - start):.3g}s taken"
-                         
-            if check_mse:
-                filter_gains = load_data(filter_path)["gains"]
-                filter_mse = mean_square_error(true_gains, filter_gains)
-
-                smoother_gains = load_data(smoother_path)["gains"]
-                smoother_mse = mean_square_error(true_gains, smoother_gains)
-                log_msg += f", with filter-MSE={filter_mse:.3g}, " \
-                         + f"smoother-MSE={smoother_mse:.3g}"
+                    smoother_gains = load_data(smoother_path)["gains"]
+                    smoother_mse = mean_square_error(true_gains, smoother_gains)
+                    log_msg += f", with filter-MSE={filter_mse:.3g}, " \
+                            + f"smoother-MSE={smoother_mse:.3g}"
+            else:
+                log_msg = f"kalcal-full on {percent}MP with " \
+                        + f"sigma_f={sigma_f:.3g} already completed"
             
             logging.info(log_msg)
             if progress:
                 pbar.update(1)
                 pbar.refresh()
 
-        logging.debug(f"Saving gains results to files for {percent}MP")    
-        with refreeze(paths) as file:
-            filter_dir[percent] = filter_paths
-            smoother_dir[percent] = smoother_paths   
+    logging.info("Calibration complete")
 
-    logging.info("Updating parameter information")
-    with refreeze(params) as file:
-        file["kalcal-full"] = {
-            "status" : status,
-            "n-points" : n_points,
-            "prec" : prec,
-            "low-bound": lb,
-            "up-bound": ub,
-            "sigma-fs" : sigma_fs
-        }
 
 def quartical_options(params, no_gui=False):
     logging.debug("Invoking function")
@@ -1382,7 +1386,7 @@ def convert_quartical_to_codex(gains_path, runs_path, t_int, shape):
 
 
 def run_quartical_calibration(quart_options, params, 
-                                check_mse=False, progress=False):
+                                check_mse=False, progress=False, overwrite=False):
     if progress:
         pbar = progress_bar("Runs")
 
@@ -1446,14 +1450,15 @@ def run_quartical_calibration(quart_options, params,
         os.mkdir(quartical_dir)
 
     params.save()
-
-    try:
-        check_for_data(*solution_paths)
-        logging.debug("Creating new solutions")
-    except DataExistsError:
-        logging.info("No deletion done")
-            
-        return    
+    if not overwrite:
+        try:
+            check_for_data(*solution_paths)
+            logging.debug("Creating new solutions")
+        except DataExistsError:
+            logging.info("No deletion done")
+            return
+    else:
+        logging.debug("Overwriting previous solutions")
 
     total_runs = n_points * len(percents)
     true_gains = load_data(paths["gains"]["true"]["files"])["gains"]
