@@ -15,7 +15,7 @@ from numpy.linalg import inv, cholesky
 import subprocess
 import zarr
 
-@njit(fastmath=True, nogil=True, inline="always")
+@njit(fastmath=True, nogil=True)
 def compute_e_vector(data, model, weight, gains, ant1, ant2):
     """Calculate the error vector `e` from the widely
     linear form of the augmented `y - J^Hg` for a given time 
@@ -57,7 +57,7 @@ def compute_e_vector(data, model, weight, gains, ant1, ant2):
     return weight * e
 
 
-@njit(fastmath=True, nogil=True, inline="always")
+@njit(fastmath=True, nogil=True)
 def compute_r_vector(error, model, weight, gains, ant1, ant2):
     """Calculate the residual vector `r` from the widely
     linear form of the augmented `J^He` for a given time 
@@ -104,7 +104,7 @@ def compute_r_vector(error, model, weight, gains, ant1, ant2):
     return 1/2 * r
 
 
-@njit(fastmath=True, nogil=True, inline="always")
+@njit(fastmath=True, nogil=True)
 def compute_u_vector(model, weight, gains, ant1, ant2):
     """Calculate the diagonal vector `u` from the widely
     linear form of the augmented `J^HJ` for a given time 
@@ -148,7 +148,7 @@ def compute_u_vector(model, weight, gains, ant1, ant2):
     return 1/4 * u
 
 
-@njit(fastmath=True, nogil=True, inline="always")
+@njit(fastmath=True, nogil=True)
 def compute_sinv_vector(model, weight, gains, tinv, ant1, ant2):
     """Calculate the diagonal vector $s^{-1}$ of inverse
     measurement covariance `S^{-1}` from widely linear 
@@ -197,7 +197,7 @@ def compute_sinv_vector(model, weight, gains, tinv, ant1, ant2):
     return 1.0 - 0.25 * weight * temp
 
 
-@njit(fastmath=True, nogil=True, cache=True, parallel=True)
+@njit(fastmath=True, nogil=True)
 def diag_filter(data, model, weight, mp, pp, q, calcPhi=False):
     """Filter algorithm of kalcal-diag that uses diagonal
     approximation and various optimizations to perform
@@ -288,7 +288,7 @@ def diag_filter(data, model, weight, mp, pp, q, calcPhi=False):
     return m, p, phi
 
 
-@njit(fastmath=True, nogil=True, cache=True, parallel=True)
+@njit(fastmath=True, nogil=True)
 def diag_smoother(m, p, q): 
     """Smoother algorithm of kalcal-diag that uses diagonal 
     approximation and various optimizations to perform 
@@ -457,13 +457,13 @@ def kalcal_diag_options(params, no_gui=False):
     settings["low-bound"] = (
         "Exponent Lower-bound",
         "The lower-bound to use as an exponent for the smallest order of magnitude.",
-        -4,
+        -4.0,
     )
 
     settings["up-bound"] = (
         "Exponent Upper-bound",
         "The upper-bound to use as an exponent for the largest order of magnitude.",
-        -2,
+        -2.0,
     )
 
     app = settings.to_widget()
@@ -990,13 +990,13 @@ def kalcal_full_options(params, no_gui=False):
     settings["low-bound"] = (
         "Exponent Lower-bound",
         "The lower-bound to use as an exponent for the smallest order of magnitude.",
-        -4,
+        -4.0,
     )
 
     settings["up-bound"] = (
         "Exponent Upper-bound",
         "The upper-bound to use as an exponent for the largest order of magnitude.",
-        -2,
+        -2.0,
     )
 
     app = settings.to_widget()
@@ -1014,10 +1014,11 @@ def kalcal_full_options(params, no_gui=False):
     logging.debug("kalcal-full settings complete and returning")
     return settings
 
-def run_kalcal_full_calibration(kal_full_options, params, 
-                                check_mse=False, progress=False, 
+
+def run_kalcal_full_calibration(kal_full_options, params,
+                                check_mse=False, progress=False,
                                 overwrite=False, resume=False):
-    
+
     if progress:
         pbar = progress_bar("Runs")
 
@@ -1054,9 +1055,9 @@ def run_kalcal_full_calibration(kal_full_options, params,
     params.save()
 
     if status == "DISABLED":
-        logging.info("kalcal-full is disabled, do nothing")        
+        logging.info("kalcal-full is disabled, do nothing")
         return
-    
+
     sigma_fs = np.round(np.logspace(lb, ub, n_points), prec)
     params["kalcal-full"]["sigma-fs"] = sigma_fs
     params.save()
@@ -1077,7 +1078,7 @@ def run_kalcal_full_calibration(kal_full_options, params,
                                                             mp=percent, sigma_f=sigma_f)
             smoother_paths[percent][sigma_f] = smoother_dir / smoother_template.format(
                                                             mp=percent, sigma_f=sigma_f)
-    
+
     solution_paths = [filter_paths[percent][sigma_f] for sigma_f in sigma_fs for percent in percents]
     solution_paths += [smoother_paths[percent][sigma_f] for sigma_f in sigma_fs for percent in percents]
 
@@ -1095,7 +1096,7 @@ def run_kalcal_full_calibration(kal_full_options, params,
     params.save()
     filter_run_flags = {percent: n_points * [1] for percent in percents}
     smoother_run_flags = {percent: n_points * [1] for percent in percents}
-    
+
     if not overwrite:
         if resume:
             logging.info("Checking for stopped runs")
@@ -1106,11 +1107,11 @@ def run_kalcal_full_calibration(kal_full_options, params,
                     if filter_path.exists():
                         filter_run_flags[percent][i] = 0
                     if smoother_path.exists():
-                        smoother_run_flags[percent][i] = 0   
+                        smoother_run_flags[percent][i] = 0
 
         filter_resume = np.array([arr for arr in filter_run_flags.values()])
         smoother_resume = np.array([arr for arr in smoother_run_flags.values()])
-
+        total_points = n_points * len(percents)
         if not (filter_resume.any() and smoother_resume.any()):
             try:
                 check_for_data(*solution_paths)
@@ -1121,14 +1122,14 @@ def run_kalcal_full_calibration(kal_full_options, params,
                 logging.info("No deletion done")
                 return
         else:
-            total = filter_resume.sum() - smoother_resume.sum()
-            logging.info(f"Missing {total} solutions, resuming")
+            total = filter_resume.sum()
+            logging.info(f"Missing {total_points - total} solutions, resuming")
     else:
         logging.debug("Overwriting previous solutions")
 
-    total_runs = n_points * len(percents)
+    total_runs = total_points - filter_resume.sum()
     true_gains = load_data(paths["gains"]["true"]["files"])["gains"]
-    
+
     if progress:
         pbar.total = total_runs
 
@@ -1138,14 +1139,21 @@ def run_kalcal_full_calibration(kal_full_options, params,
     logging.info(f"Running line-search on {n_points} points " \
                 + f"({total_runs} runs)")
     logging.info(rf"Using interval [1e{lb}, 1e{ub}].")
-    for percent in percents:
-        for i, sigma_f in enumerate(sigma_fs):
-            if filter_run_flags[percent][i] and smoother_run_flags[percent][i]:
-                filter_path = filter_paths[percent][sigma_f]
-                smoother_path = smoother_paths[percent][sigma_f]
-                
-                with benchmark(algorithm_id, percent, sigma_f):
-                    kalcal_full(
+    from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
+
+    futures = []
+    results = []
+    
+    with ProcessPoolExecutor(max_workers=8) as ppe:
+
+        for percent in percents:
+            for i, sigma_f in enumerate(sigma_fs):
+                if filter_run_flags[percent][i] and smoother_run_flags[percent][i]:
+                    filter_path = filter_paths[percent][sigma_f]
+                    smoother_path = smoother_paths[percent][sigma_f]
+
+                    fut = ppe.submit(
+                        kalcal_full,
                         str(paths["data"]["ms"]),
                         vis_column="DATA_100MP",
                         model_column=f"MODEL_{percent}MP",
@@ -1155,25 +1163,37 @@ def run_kalcal_full_calibration(kal_full_options, params,
                         out_smoother=smoother_path
                     )
 
-                log_msg = f"kalcal-full on {percent}MP with "\
+                    futures.append(fut)
+
+        for f in as_completed(futures):
+            results.append(f.result())
+            if progress:
+                pbar.update()
+
+    if check_mse:
+        for percent in percents:
+            for i, sigma_f in enumerate(sigma_fs):
+                if filter_run_flags[percent][i] and smoother_run_flags[percent][i]:
+
+                    log_msg = f"kalcal-full on {percent}MP with "\
                         + f"`sigma_f={sigma_f:.3g}`"
-                            
-                if check_mse:
+
+                    filter_path = filter_paths[percent][sigma_f]
+                    smoother_path = smoother_paths[percent][sigma_f]
+
                     filter_gains = load_data(filter_path)["gains"]
                     filter_mse = mean_square_error(true_gains, filter_gains)
 
                     smoother_gains = load_data(smoother_path)["gains"]
                     smoother_mse = mean_square_error(true_gains, smoother_gains)
+
                     log_msg += f", with filter-MSE={filter_mse:.3g}, " \
                             + f"smoother-MSE={smoother_mse:.3g}"
-            else:
-                log_msg = f"kalcal-full on {percent}MP with " \
+                else:
+                    log_msg = f"kalcal-full on {percent}MP with " \
                         + f"sigma_f={sigma_f:.3g} already completed"
-            
-            logging.info(log_msg)
-            if progress:
-                pbar.update(1)
-                pbar.refresh()
+
+                logging.info(log_msg)
 
     logging.info("Calibration complete")
 
@@ -1274,12 +1294,6 @@ def quartical_setup(quart_options, params):
     config_path = config_dir / "quartical.yml"
     paths["config"]["quartical"] = config_path
     params.save()
-
-    try:
-        check_for_data(config_path)
-    except:
-        logging.info("No deletion done, return.")
-        return
     
     logging.info("Fetching QuartiCal option information")
     status = quart_options["status"]

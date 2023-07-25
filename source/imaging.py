@@ -3,7 +3,6 @@ from africanus.calibration.utils import corrupt_vis, correct_vis
 from ducc0.wgridder import ms2dirty, dirty2ms
 import logging
 from casacore.tables import table, maketabdesc, makearrcoldesc
-from pfb.utils.fits import set_wcs, save_fits
 from source.data import load_data
 from source.metrics import mean_square_error, root_mean_square_error
 from source.other import progress_bar, check_for_data, DataExistsError
@@ -11,6 +10,79 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from astropy.io import fits
+from astropy.wcs import WCS
+from datetime import datetime
+
+def to4d(data):
+    """From pfb.utils.misc"""
+
+    if data.ndim == 4:
+        return data
+    elif data.ndim == 2:
+        return data[None, None]
+    elif data.ndim == 3:
+        return data[None]
+    elif data.ndim == 1:
+        return data[None, None, None]
+    else:
+        raise ValueError("Only arrays with ndim <= 4 can be broadcast to 4D.")
+    
+def save_fits(name, data, hdr, overwrite=True, dtype=np.float32):
+    """From pfb.utils.fits"""
+
+    hdu = fits.PrimaryHDU(header=hdr)
+    data = np.transpose(to4d(data), axes=(0, 1, 3, 2))[:, :, ::-1]
+    hdu.data = np.require(data, dtype=dtype, requirements='F')
+    hdu.writeto(name, overwrite=overwrite)
+
+
+def set_wcs(cell_x, cell_y, nx, ny, radec, freq,
+            unit='Jy/beam', GuassPar=None, unix_time=None):
+    """
+    cell_x/y - cell sizes in degrees
+    nx/y - number of x and y pixels
+    radec - right ascention and declination in radians
+    freq - frequencies in Hz
+    """
+
+    w = WCS(naxis=4)
+    w.wcs.ctype = ['RA---SIN', 'DEC--SIN', 'FREQ', 'STOKES']
+    w.wcs.cdelt[0] = -cell_x
+    w.wcs.cdelt[1] = cell_y
+    w.wcs.cdelt[3] = 1
+    w.wcs.cunit[0] = 'deg'
+    w.wcs.cunit[1] = 'deg'
+    w.wcs.cunit[2] = 'Hz'
+    if np.size(freq) > 1:
+        ref_freq = freq[0]
+    else:
+        ref_freq = freq
+    w.wcs.crval = [radec[0]*180.0/np.pi, radec[1]*180.0/np.pi, ref_freq, 1]
+    # LB - y axis treated differently because of stupid fits convention
+    w.wcs.crpix = [1 + nx//2, ny//2, 1, 1]
+
+    if np.size(freq) > 1:
+        w.wcs.crval[2] = freq[0]
+        df = freq[1]-freq[0]
+        w.wcs.cdelt[2] = df
+        fmean = np.mean(freq)
+    else:
+        if isinstance(freq, np.ndarray):
+            fmean = freq[0]
+        else:
+            fmean = freq
+
+    header = w.to_header()
+    header['RESTFRQ'] = fmean
+    header['ORIGIN'] = 'pfb-clean'
+    header['BTYPE'] = 'Intensity'
+    header['BUNIT'] = unit
+    header['SPECSYS'] = 'TOPOCENT'
+    if unix_time is not None:
+        header['UTC_TIME'] = datetime.utcfromtimestamp(unix_time).strftime('%Y-%m-%d %H:%M:%S')
+
+    return header
 
 def calculate_image_noise_rms(params):
     logging.debug("Invoking function")
@@ -79,6 +151,7 @@ def calculate_imaging_columns(path, params):
         logging.debug("Saving imaging data to table")
         tb.putcol("CORRECTED_DATA", corrected_data)
         tb.putcol("WEIGHT_SPECTRUM", weight_spectrum.astype(np.float32))
+
 
 def image_to_fits(new_image, cell_rad, fits_file, freq, radec):
     nx, ny = new_image.shape
@@ -787,7 +860,7 @@ def run_true_flux_extractor(params, overwrite=False):
     fits_dir = paths["fits"]["true"]["dir"]
     fits_template = paths["fits"]["true"]["template"]
     flux_paths = {percent: paths["fluxes"]["true"]["dir"] / f"true-flux-{percent}mp.npz" for percent in percents}
-    paths["fluxes"]["true"]["files"]["solved"] = flux_paths
+    paths["fluxes"]["true"]["solved"] = flux_paths
     fits_paths["residual"] = {}
     fits_paths["dirty"] = {}
     fits_paths["corrected"] = {}

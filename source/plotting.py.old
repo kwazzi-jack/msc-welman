@@ -1,6 +1,5 @@
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 import numpy as np
-from numpy.typing import NDArray
 from source.other import check_for_data, cm2in
 from source.parameters import Settings
 from source.data import load_data
@@ -8,7 +7,7 @@ from pathlib import Path
 import logging
 import matplotlib as mpl
 from matplotlib import pyplot as plt
-from matplotlib.ticker import FixedLocator, MultipleLocator, AutoLocator, AutoMinorLocator
+from matplotlib.ticker import MultipleLocator, AutoLocator, AutoMinorLocator
 from IPython.display import display, clear_output
 import matplotlib.colors as mc
 import colorsys
@@ -326,88 +325,45 @@ def get_min(x, y):
     logging.debug("Invoking function")
     return y[x.argmin()]
 
-# def place_ticks(axes, tick_type=None, axis="x", scale="log"):
-#     logging.debug("Invoking function")
-#     for ax in axes:
-#         if axis == "x" or axis == "both":
-#             if isinstance(tick_type, (int, float)):
-#                 ax.xaxis.set_major_locator(MultipleLocator(tick_type))
-#                 ax.xaxis.set_minor_locator(MultipleLocator(tick_type / 5))
-#             elif tick_type == None:
-#                 ax.xaxis.set_major_locator(AutoLocator())
-#                 ax.xaxis.set_minor_locator(AutoMinorLocator())
-#             elif "kalcal" in tick_type:
-#                 ax.xaxis.set_major_locator(MultipleLocator(0.5))
-#                 ax.xaxis.set_major_formatter("{x:.1f}")     
-#                 ax.xaxis.set_minor_locator(MultipleLocator(0.1))
-#             elif "quartical" in tick_type:
-#                 ax.xaxis.set_major_locator(MultipleLocator(40))
-#                 ax.xaxis.set_major_formatter("{x:.0f}")
-#                 ax.xaxis.set_minor_locator(MultipleLocator(8))
-#             else:
-#                 ax.xaxis.set_major_locator(AutoLocator())
-#                 ax.xaxis.set_minor_locator(AutoMinorLocator())
-#         if axis == "y" or axis == "both":
-#             if isinstance(tick_type, (int, float)):
-#                 ax.yaxis.set_major_locator(MultipleLocator(tick_type))
-#                 ax.yaxis.set_minor_locator(MultipleLocator(tick_type / 5))
-#             elif tick_type == None:
-#                 ax.yaxis.set_major_locator(AutoLocator())
-#                 ax.yaxis.set_minor_locator(AutoMinorLocator())
-#             elif "kalcal" in tick_type:
-#                 ax.yaxis.set_major_locator(MultipleLocator(0.5))
-#                 ax.yaxis.set_major_formatter("{x:.1f}")     
-#                 ax.yaxis.set_minor_locator(MultipleLocator(0.1))
-#             elif "quartical" in tick_type:
-#                 ax.yaxis.set_major_locator(MultipleLocator(40))
-#                 ax.yaxis.set_major_formatter("{x:.0f}")
-#                 ax.yaxis.set_minor_locator(MultipleLocator(8))
-#             else:
-#                 ax.yaxis.set_major_locator(AutoLocator())
-#                 ax.yaxis.set_minor_locator(AutoMinorLocator())
-
-def place_ticks(axes, bounds=None, n_ticks=6, 
-                stype="log", axis="x", precision=0):
+def place_ticks(axes, tick_type=None, axis="x"):
     logging.debug("Invoking function")
-    if not isinstance(axes, (list, np.ndarray)):
-        axes = [axes]
     for ax in axes:
-        if axis == "x" or axis == "both":                
-            if stype == "log":
-                lb, ub = bounds
-                lb, ub = int(np.floor(lb)), int(np.ceil(ub))
-                major_ticks = FixedLocator(np.arange(lb, ub + 0.5, 0.5))
-                minor_ticks = AutoMinorLocator(5)
-            elif stype == "linear":
-                lb, ub = bounds
-                major_step = round((ub - lb)/n_ticks, precision)
-                major_ticks = MultipleLocator(base=major_step)
-                minor_ticks = AutoMinorLocator(5)
-            else:                
-                major_ticks = AutoLocator()
-                minor_ticks = AutoMinorLocator(5)
-                
-            ax.xaxis.set_major_locator(major_ticks)
-            ax.xaxis.set_minor_locator(minor_ticks)
-        
-        if axis == "y" or axis == "both":
-            if stype == "log":
-                lb, ub = bounds
-                lb, ub = int(np.floor(lb)), int(np.ceil(ub))
-                major_ticks = FixedLocator(np.arange(lb, ub + 0.5, 0.5))
-                minor_ticks = AutoMinorLocator(5)
-            elif stype == "linear":
-                lb, ub = bounds
-                major_step = round((ub - lb)/n_ticks, precision)
-                major_ticks = MultipleLocator(base=major_step)
-                minor_ticks = AutoMinorLocator(5)
+        if axis == "x" or axis == "both":
+            if isinstance(tick_type, (int, float)):
+                ax.xaxis.set_major_locator(MultipleLocator(tick_type))
+                ax.xaxis.set_minor_locator(MultipleLocator(tick_type / 5))
+            elif tick_type == None:
+                ax.xaxis.set_major_locator(AutoLocator())
+                ax.xaxis.set_minor_locator(AutoMinorLocator())
+            elif "kalcal" in tick_type:
+                ax.xaxis.set_major_locator(MultipleLocator(0.5))
+                ax.xaxis.set_major_formatter("{x:.1f}")     
+                ax.xaxis.set_minor_locator(MultipleLocator(0.1))
+            elif "quartical" in tick_type:
+                ax.xaxis.set_major_locator(MultipleLocator(40))
+                ax.xaxis.set_major_formatter("{x:.0f}")
+                ax.xaxis.set_minor_locator(MultipleLocator(8))
             else:
-                major_ticks = AutoLocator()
-                minor_ticks = AutoMinorLocator(5)
-
-            ax.yaxis.set_major_locator(major_ticks)
-            ax.yaxis.set_minor_locator(minor_ticks)
-    
+                ax.xaxis.set_major_locator(AutoLocator())
+                ax.xaxis.set_minor_locator(AutoMinorLocator())
+        if axis == "y" or axis == "both":
+            if isinstance(tick_type, (int, float)):
+                ax.yaxis.set_major_locator(MultipleLocator(tick_type))
+                ax.yaxis.set_minor_locator(MultipleLocator(tick_type / 5))
+            elif tick_type == None:
+                ax.yaxis.set_major_locator(AutoLocator())
+                ax.yaxis.set_minor_locator(AutoMinorLocator())
+            elif "kalcal" in tick_type:
+                ax.yaxis.set_major_locator(MultipleLocator(0.5))
+                ax.yaxis.set_major_formatter("{x:.1f}")     
+                ax.yaxis.set_minor_locator(MultipleLocator(0.1))
+            elif "quartical" in tick_type:
+                ax.yaxis.set_major_locator(MultipleLocator(40))
+                ax.yaxis.set_major_formatter("{x:.0f}")
+                ax.yaxis.set_minor_locator(MultipleLocator(8))
+            else:
+                ax.yaxis.set_major_locator(AutoLocator())
+                ax.yaxis.set_minor_locator(AutoMinorLocator())
 
 def init_plot(params, title, algorithms="", layout=(2, 2), size=None):
     logging.debug("Invoking function")
@@ -587,7 +543,7 @@ def create_amplitude_and_phase_signal_plot(ants, params, show=False,
         axes[c + 3].set_ylabel(rf"$\Im(g_{{{ant + 1}}}(t))$", size=label_size)
 
     # Place ticks and grid 
-    place_ticks(axes, (1, n_time), 6, stype="linear")
+    place_ticks(axes, n_time//5)
     place_grid(axes)
 
     logging.debug("Placing ticks")
@@ -674,6 +630,10 @@ def create_source_distribution_plot(params, show=False, overwrite=False):
 
     axes = axes.reshape(n_cols, n_rows).transpose()
 
+    true_path = paths["fluxes"]["true"]["solved"][100]
+    true_residual = load_data(true_path)["residual"]
+    true_rms = np.sqrt(np.square(np.abs(true_residual)).mean())
+
     # Plot each image
     for i, percent in enumerate(percents):
 
@@ -683,7 +643,7 @@ def create_source_distribution_plot(params, show=False, overwrite=False):
         srcs = len(np.nonzero(sub_flux)[0])        
         axes[i, 0].set_title(f"{percent} MP", size=title_size)
         axes[i, 1].set_title(f"{srcs} sources", size=title_size)  
-            
+        
         # Plot image
         axes[i, 1].grid(False)
         model[model == 0] = 1e-7
@@ -702,6 +662,7 @@ def create_source_distribution_plot(params, show=False, overwrite=False):
             axes[i, 1].add_patch(circle)
         
         axes[i, 0].bar(sources, sub_flux, color=colors, width=1)
+        axes[i, 0].axhline(y=true_rms, linestyle="--", color="black", lw=2.0)
         axes[i, 0].set_xlabel("Source Index", size=label_size)
         axes[i, 0].set_ylabel("Jy/pixel", size=label_size)
     
@@ -807,6 +768,7 @@ def create_fits_grid_plot(params, algorithm, indices, labels, bounds, itype="res
     logging.info("Creating grid")
     true_image = load_data(true_paths[100])[itype.lower()]
     true_model = load_data(true_models[percents[-1]])["model"]
+
     for i in range(indices.shape[0]):
         param_label = labels[i]
         for j, percent in enumerate(percents):
@@ -1235,10 +1197,9 @@ def create_standard_plot(params, **kwargs):
         # Plot each image
         output_str = [str(metric)]
         for i, percent in enumerate(percents):
-            energy_axes[i].set_ylabel(plot_options["kalcal"]["energy"]["label"],
-                                        size=label_size)
             energy_values = get_energy_values(diag_paths[percent])
             opt_idx = energy_values.argmin()
+            print(np.log10(energy_values.mean()))
             logging.info(f"kalcal-diag energy on `{metric}` for {percent}MP: "\
                         + f"sigma-fs['{opt_idx}'] = {diag_sigma_fs[opt_idx]:.3g} "\
                         + f"(10^({np.log10(diag_sigma_fs[opt_idx]):.3g})) = {energy_values.min():.3E}")
@@ -1246,17 +1207,11 @@ def create_standard_plot(params, **kwargs):
             output_str += [
                 f"{diag_sigma_fs[opt_idx]:.3g}", f"{energy_values[opt_idx]:.3g}", ""  
             ]
-            if energy_values.max() >= 1e4:
-                energy_offset = int(np.log10(energy_values.max()))
-                energy_values, = offset_axis([energy_values], energy_axes[i], energy_offset)
             line = plot_line(params, diag_sigma_fs, energy_values, energy_axes[i], 
                       label=diag_label, style=diag_style, 
                       linewidth=diag_width, xscale=diag_scale,
-                      yscale="linear", color=diag_color, near=near)
-
-            min_val = energy_values.min()
-            min_var = np.sqrt(np.square(energy_values - energy_values.min()).mean())
-            logging.info(f"Energy function on {percent}MP: Min=({min_val:.3f}), Range=({min_val - min_var:.3f}, {min_val + min_var:.3f})")
+                      yscale="log", color=diag_color, near=near)
+        
         logging.info(f" & ".join(output_str) + " \\\\")          
         lines.append(line)
 
@@ -1345,8 +1300,6 @@ def create_standard_plot(params, **kwargs):
         # Plot each image
         output_str = [str(metric)]
         for i, percent in enumerate(percents):
-            energy_axes[i].set_ylabel(plot_options["kalcal"]["energy"]["label"],
-                                        size=label_size)
             energy_values = get_energy_values(full_paths[percent])
             opt_idx = energy_values.argmin()
             logging.info(f"kalcal-full energy on `{metric}` for {percent}MP: "\
@@ -1356,17 +1309,11 @@ def create_standard_plot(params, **kwargs):
             output_str += [
                 f"{full_sigma_fs[opt_idx]:.3g}", f"{energy_values[opt_idx]:.3g}", ""  
             ]
-            if energy_values.max() >= 1e4:
-                energy_offset = int(np.log10(energy_values.max()))
-                energy_values, = offset_axis([energy_values], energy_axes[i], energy_offset)
             line = plot_line(params, full_sigma_fs, energy_values, energy_axes[i], 
                       label=full_label, style=full_style, 
                       linewidth=full_width, xscale=full_scale,
                       yscale="log", color=full_color, near=near)
         
-            min_val = energy_values.min()
-            min_var = np.sqrt(np.square(energy_values - energy_values.min()).mean())
-            logging.info(f"Energy function on {percent}MP: Min=({min_val:.3f}), Range=({min_val - min_var:.3f}, {min_val + min_var:.3f})")
         logging.info(f" & ".join(output_str) + " \\\\")
         lines.append(line)
 
@@ -1428,9 +1375,8 @@ def create_standard_plot(params, **kwargs):
             mode = limit_adjust.get("mode", "normal")
             if isinstance(mode, dict):
                 mode = mode.get("main", "normal")
-
+            
             adjust = limit_adjust.get("adjust", (0.0, 0.85))
-
             if isinstance(adjust, dict):
                 if adjust.get(percent, False):
                     adjust = adjust[percent]
@@ -1465,9 +1411,10 @@ def create_standard_plot(params, **kwargs):
                     adjust = (0.0, 0.85)
         
             clip_axis(energy_values, energy_axes[i], mode=mode, 
-                      adjust=adjust, scale="linear")
+                      adjust=adjust, scale="log")
+            energy_axes[i].set_ylabel(plot_options["kalcal"]["energy"]["label"],
+                                        size=label_size)
 
-    n_ticks = 6
     if kalcal_diag_status or kalcal_full_status:
         lbs, ubs = [], []
         if kalcal_diag_status:
@@ -1478,29 +1425,30 @@ def create_standard_plot(params, **kwargs):
             ubs.append(params["kalcal-full"]["up-bound"])
         lb = min(lbs)
         ub = max(ubs)
-        n_ticks = 2 * (ub - lb)
-        place_ticks(axes, bounds=(lb, ub), stype="log", axis="x")
-        for ax in axes:
-            ax.set_xlim((lb, ub))
+        tick_count = (ub - lb)/6
+        place_ticks(axes, tick_count)
 
         if diag_energy_status or full_energy_status:
+            lbs, ubs = [], []
+            for ax in axes:
+                lb, ub = ax.get_ylim()
+                ticks = np.linspace(lb, ub, 6)
+                ax.set_yticks(ticks)
+            
             for ax in energy_axes:
                 lb, ub = ax.get_ylim()
-                place_ticks(ax, bounds=(lb, ub), stype="linear", 
-                            axis="y", precision=4)
-                
-                
+                ticks = np.linspace(lb, ub, 6)
+                ax.set_yticks(ticks)
+
+    # for ax in axes:
+    #     ax.set_xlim((-2, 1))
     if quartical_status:
         t_ints = params["quartical"]["t-ints"]
         lb = min(t_ints)
         ub = max(t_ints)
-        place_ticks(quart_axes, bounds=(lb, ub), 
-                    n_ticks=n_ticks, stype="linear")
-        if lb < 10:
-            lb = 0
-        for ax in quart_axes:
-            ax.set_xlim((ub, lb))
-
+        tick_count = int(round((ub - lb + 1)))/6
+        place_ticks(quart_axes, tick_count)
+    
     fig.subplots_adjust(**subplot_adjust)
     if not diag_energy_status and not full_energy_status:
         place_grid(axes, axis="both")

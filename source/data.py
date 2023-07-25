@@ -969,7 +969,7 @@ def create_visibilities(vis_options, params):
                 return
                 
         logging.debug("Calculating `SIGMA_N` column")
-        sigma_array = np.ones_like(weights) * np.sqrt(2) * sigma_n 
+        sigma_array = np.ones_like(weights) # * np.sqrt(2) * sigma_n 
         
         logging.debug("Calculating `WEIGHTS` column")
         weight_array = np.ones_like(weights) * W

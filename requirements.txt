@@ -12,5 +12,5 @@ tqdm
 zarr
 jupyter
 ipywidgets
-https://github.com/ratt-ru/QuartiCal/archive/refs/heads/v0.2.0-dev.zip
-https://github.com/ratt-ru/pfb-clean/archive/refs/heads/master.zip
+jupyternotify
+https://github.com/ratt-ru/QuartiCal/archive/refs/heads/main.zip

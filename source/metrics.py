@@ -126,12 +126,11 @@ def calculate_psi_1_on_fluxes(params, paths):
     Ix = true_data["Ix"]
     Iy = true_data["Iy"]
     true_flux = model[Ix, Iy]
-
     results = np.zeros((len(paths)), dtype=np.float64)
+    n = 10
     for i, path in enumerate(paths):
         fluxes = load_data(path)["flux"]
-        results[i] = weighted_mean_percent_flux_error(fluxes, true_flux)
-    
+        results[i] = weighted_mean_percent_flux_error(fluxes[:n], true_flux[:n])
     return results
 
 def calculate_rms_from_residuals(params, paths):
